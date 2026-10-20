@@ -380,7 +380,7 @@ export function Home() {
             <div className="toggle-panel">
               {online.map((member) => (
                 <div key={member.id} className="presence">
-                  <Avatar name={member.name} hue={member.hue} size="sm" />
+                  <Avatar name={member.name} hue={member.hue} avatar={member.avatar} id={member.id} size="sm" />
                   <span className="pv">
                     <strong>{member.name}</strong>
                     <span>{memberTime(member.tz_offset)} · {member.location}</span>

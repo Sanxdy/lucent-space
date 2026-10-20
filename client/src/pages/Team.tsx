@@ -4,7 +4,7 @@ import { api } from "../api";
 import { useStore, useWorkspace } from "../store";
 import { Avatar } from "../components/Avatar";
 import { Modal } from "../components/Modal";
-import { IconMessage, IconMoon, IconSun, IconUser } from "../components/Icons";
+import { IconMessage, IconMoon, IconSun, IconTeam, IconTrash, IconUser } from "../components/Icons";
 import { memberTime, timezoneRelation } from "../lib/format";
 
 // ponytail: presence and capacity are derived from the member id so the demo looks alive; swap for real heartbeats and contracted hours when sessions go realtime.
@@ -39,17 +39,77 @@ function isDaytime(tzOffset: number) {
 
 export function Team() {
   const workspace = useWorkspace();
-  const { me, toast } = useStore();
+  const { me, toast, refresh } = useStore();
   const [team, setTeam] = useState("All");
   const [invite, setInvite] = useState(false);
   const [created, setCreated] = useState<{ email: string; password: string } | null>(null);
-  const [form, setForm] = useState({ name: "", email: "", role: "", team: "Design", location: "", tz_offset: "0" });
+  const [form, setForm] = useState({ name: "", email: "", role: "", team: "", location: "", tz_offset: "0" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [teamModal, setTeamModal] = useState(false);
+  const [newTeam, setNewTeam] = useState("");
+  const [teamBusy, setTeamBusy] = useState(false);
+  const [teamError, setTeamError] = useState("");
   const emailRef = useRef<HTMLInputElement>(null);
 
-  const teams = ["All", ...new Set(workspace.members.map((member) => member.team))];
+  // Teams are workspace rows now, so an admin can add and remove them. Fall back
+  // to the names in use only if the registry is somehow empty.
+  const registry = workspace.teams?.length
+    ? workspace.teams
+    : [...new Set(workspace.members.map((member) => member.team))].map((name, index) => ({
+        id: name,
+        name,
+        position: index,
+      }));
+  const teams = ["All", ...registry.map((row) => row.name)];
   const members = workspace.members.filter((member) => team === "All" || member.team === team);
+  const countFor = (name: string) => workspace.members.filter((member) => member.team === name).length;
+  const defaultTeam = registry[0]?.name ?? "Product";
+
+  const addTeam = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setTeamBusy(true);
+    setTeamError("");
+    try {
+      await api.createTeam(newTeam.trim());
+      await refresh();
+      toast(`Team “${newTeam.trim()}” added`);
+      setNewTeam("");
+    } catch (caught) {
+      setTeamError(caught instanceof Error ? caught.message : "Could not add that team");
+    } finally {
+      setTeamBusy(false);
+    }
+  };
+
+  const removeTeam = async (row: { id: string; name: string }) => {
+    const count = countFor(row.name);
+    const others = registry.filter((candidate) => candidate.id !== row.id);
+    const moveTo = count && others.length ? others[0] : undefined;
+    const warning = count
+      ? `Delete “${row.name}”? ${count} ${count === 1 ? "person moves" : "people move"} to “${moveTo?.name}”.`
+      : `Delete “${row.name}”?`;
+    if (!window.confirm(warning)) return;
+    try {
+      await api.deleteTeam(row.id, moveTo?.id);
+      await refresh();
+      if (team === row.name) setTeam("All");
+      toast(`Team “${row.name}” deleted`);
+    } catch (caught) {
+      toast(caught instanceof Error ? caught.message : "Could not delete that team", "error");
+    }
+  };
+
+  const removeMember = async (member: { id: string; name: string }) => {
+    if (!window.confirm(`Remove ${member.name} from this workspace? Their tasks stay and become unassigned.`)) return;
+    try {
+      await api.removeMember(member.id);
+      await refresh();
+      toast(`${member.name} removed`);
+    } catch (caught) {
+      toast(caught instanceof Error ? caught.message : "Could not remove them", "error");
+    }
+  };
   const openTasks = workspace.tasks.filter((task) => task.status !== "done");
   const online = workspace.members.filter((member) => statusOf(member).label === "Online").length;
   const inFocus = workspace.members.filter((member) => statusOf(member).label === "In focus").length;
@@ -107,9 +167,14 @@ export function Team() {
             ))}
           </Seg>
           {me?.is_admin && (
-            <button className="btn btn-primary" onClick={() => { setInvite(true); setCreated(null); }}>
-              <IconUser size={16} /> Invite
-            </button>
+            <>
+              <button className="btn" onClick={() => { setTeamModal(true); setTeamError(""); }}>
+                <IconTeam size={16} /> Teams
+              </button>
+              <button className="btn btn-primary" onClick={() => { setInvite(true); setCreated(null); setForm({ ...form, team: form.team || defaultTeam }); }}>
+                <IconUser size={16} /> Invite
+              </button>
+            </>
           )}
         </div>
       </header>
@@ -124,7 +189,7 @@ export function Team() {
             <article key={member.id} className="member-card glass">
               <div className="mc-top">
                 <span className="mc-av">
-                  <Avatar name={member.name} hue={member.hue} />
+                  <Avatar name={member.name} hue={member.hue} avatar={member.avatar} id={member.id} />
                   <i className={`presence-dot ${status.cls}`} />
                 </span>
                 <div className="mc-id">
@@ -168,11 +233,70 @@ export function Team() {
                 <a className="btn-icon" href={`mailto:${member.email}`} aria-label={`Message ${member.name}`}>
                   <IconMessage size={16} />
                 </a>
+                {me?.is_admin && member.id !== me.id && (
+                  <button
+                    className="btn-icon btn-icon-danger"
+                    aria-label={`Remove ${member.name}`}
+                    title={`Remove ${member.name}`}
+                    onClick={() => void removeMember(member)}
+                  >
+                    <IconTrash size={16} />
+                  </button>
+                )}
               </div>
             </article>
           );
         })}
       </section>
+
+      {teamModal && (
+        <Modal
+          title="Teams"
+          onClose={() => setTeamModal(false)}
+          footer={<button className="btn btn-primary" onClick={() => setTeamModal(false)}>Done</button>}
+        >
+          <div className="col" style={{ gap: 14 }}>
+            <form className="row" style={{ gap: 8 }} onSubmit={addTeam}>
+              <input
+                className="input"
+                aria-label="New team name"
+                placeholder="New team name"
+                value={newTeam}
+                onChange={(event) => setNewTeam(event.target.value)}
+                maxLength={40}
+              />
+              <button className="btn btn-primary" type="submit" disabled={teamBusy || newTeam.trim().length < 2}>
+                {teamBusy ? "Adding…" : "Add team"}
+              </button>
+            </form>
+            {teamError && <div className="auth-error" role="alert">{teamError}</div>}
+            <div className="col" style={{ gap: 6 }}>
+              {registry.map((row) => {
+                const count = countFor(row.name);
+                return (
+                  <div key={row.id} className="row" style={{ gap: 10, alignItems: "center" }}>
+                    <span className="grow">
+                      {row.name}
+                      <span className="sub" style={{ marginLeft: 8 }}>
+                        {count} {count === 1 ? "person" : "people"}
+                      </span>
+                    </span>
+                    <button
+                      className="btn btn-sm btn-icon-danger"
+                      aria-label={`Delete ${row.name}`}
+                      onClick={() => void removeTeam(row)}
+                      disabled={registry.length === 1}
+                      title={registry.length === 1 ? "A workspace needs at least one team" : `Delete ${row.name}`}
+                    >
+                      <IconTrash size={15} /> Delete
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {invite && (
         <Modal
@@ -216,9 +340,9 @@ export function Team() {
               </div>
               <div className="field">
                 <label htmlFor="inv-team">Team</label>
-                <select id="inv-team" className="select" value={form.team} onChange={(event) => setForm({ ...form, team: event.target.value })}>
-                  {["Product", "Design", "Engineering", "Marketing", "Operations"].map((name) => (
-                    <option key={name} value={name}>{name}</option>
+                <select id="inv-team" className="select" value={form.team || defaultTeam} onChange={(event) => setForm({ ...form, team: event.target.value })}>
+                  {registry.map((row) => (
+                    <option key={row.id} value={row.name}>{row.name}</option>
                   ))}
                 </select>
               </div>

@@ -225,7 +225,7 @@ export function TaskDrawer({ taskId }: { taskId: string }) {
                 const author = workspace.members.find((member) => member.id === entry.user_id);
                 return (
                   <div key={entry.id} className="comment">
-                    <Avatar name={author?.name ?? "Someone"} hue={author?.hue ?? 210} size="sm" />
+                    <Avatar name={author?.name ?? "Someone"} hue={author?.hue ?? 210} avatar={author?.avatar} id={author?.id} size="sm" />
                     <div className="cbody">
                       <div className="chead">
                         <strong>{author?.name ?? "Removed member"}</strong>
@@ -248,7 +248,7 @@ export function TaskDrawer({ taskId }: { taskId: string }) {
                 setComment("");
               }}
             >
-              <Avatar name={me?.name ?? "You"} hue={me?.hue} size="sm" />
+              <Avatar name={me?.name ?? "You"} hue={me?.hue} avatar={me?.avatar} id={me?.id} size="sm" />
               <input
                 className="input"
                 style={{ height: 34 }}

@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react";
 import { Seg } from "../components/Seg";
+import { api } from "../api";
 import { useStore, useWorkspace } from "../store";
 import { EventModal } from "../components/CreateModals";
-import { IconChevronLeft, IconChevronRight, IconPlus, IconTrash } from "../components/Icons";
+import { Modal } from "../components/Modal";
+import { IconChevronLeft, IconChevronRight, IconPlus, IconRefresh, IconTrash } from "../components/Icons";
 import { addDays, isoDay, monthMatrix, timeLabel, todayIso, weekDays } from "../lib/format";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -15,12 +17,57 @@ const KIND_COLOR: Record<string, string> = {
 
 export function Calendar() {
   const workspace = useWorkspace();
-  const { removeEvent, openTask, toast } = useStore();
+  const { removeEvent, openTask, toast, refresh } = useStore();
   const today = new Date();
   const [cursor, setCursor] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
   const [selected, setSelected] = useState(todayIso());
   const [view, setView] = useState<"month" | "week">("month");
   const [modalDay, setModalDay] = useState<string | null>(null);
+  const [syncOpen, setSyncOpen] = useState(false);
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const feedToken = workspace.calendar?.token ?? null;
+  const feedUrl = feedToken
+    ? `${window.location.origin}/api/calendar.ics?token=${encodeURIComponent(feedToken)}`
+    : "";
+
+  const createFeed = async () => {
+    setSyncBusy(true);
+    try {
+      await api.createCalendarToken();
+      await refresh();
+      toast("Calendar link created");
+    } catch (caught) {
+      toast(caught instanceof Error ? caught.message : "Could not create the link", "error");
+    } finally {
+      setSyncBusy(false);
+    }
+  };
+
+  const revokeFeed = async () => {
+    if (!window.confirm("Turn off the calendar link? Anything subscribed to it stops updating.")) return;
+    setSyncBusy(true);
+    try {
+      await api.revokeCalendarToken();
+      await refresh();
+      toast("Calendar link turned off");
+    } catch (caught) {
+      toast(caught instanceof Error ? caught.message : "Could not turn it off", "error");
+    } finally {
+      setSyncBusy(false);
+    }
+  };
+
+  const copyFeed = async () => {
+    try {
+      await navigator.clipboard.writeText(feedUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast("Copy failed, select the link and copy it manually", "error");
+    }
+  };
 
   const cells = useMemo(() => {
     if (view === "week") return weekDays(new Date(`${selected}T12:00`));
@@ -86,6 +133,9 @@ export function Calendar() {
             <button aria-pressed={view === "month"} onClick={() => setView("month")}>Month</button>
             <button aria-pressed={view === "week"} onClick={() => setView("week")}>Week</button>
           </Seg>
+          <button className="btn" onClick={() => setSyncOpen(true)}>
+            <IconRefresh size={16} /> Sync
+          </button>
           <button className="btn btn-primary" onClick={() => setModalDay(selected)}>
             <IconPlus size={16} /> New event
           </button>
@@ -201,6 +251,67 @@ export function Calendar() {
       </div>
 
       {modalDay && <EventModal day={modalDay} onClose={() => setModalDay(null)} />}
+
+      {syncOpen && (
+        <Modal
+          title="Sync with Google Calendar"
+          onClose={() => setSyncOpen(false)}
+          footer={<button className="btn btn-primary" onClick={() => setSyncOpen(false)}>Done</button>}
+        >
+          <div className="col" style={{ gap: 14 }}>
+            <p className="sub" style={{ margin: 0 }}>
+              This calendar is a read-only feed. Google Calendar, Apple Calendar and Outlook can
+              subscribe to it, and they refresh on their own schedule.
+            </p>
+            {feedToken ? (
+              <>
+                <div className="field">
+                  <span className="field-label">Feed link</span>
+                  <input
+                    className="input mono"
+                    readOnly
+                    value={feedUrl}
+                    aria-label="Calendar feed link"
+                    onFocus={(event) => event.currentTarget.select()}
+                  />
+                </div>
+                <div className="row" style={{ gap: 8 }}>
+                  <button className="btn btn-primary btn-sm" onClick={() => void copyFeed()}>
+                    {copied ? "Copied" : "Copy link"}
+                  </button>
+                  <button className="btn btn-sm" onClick={() => void createFeed()} disabled={syncBusy}>
+                    Rotate link
+                  </button>
+                  <button className="btn btn-sm btn-icon-danger" onClick={() => void revokeFeed()} disabled={syncBusy}>
+                    Turn off
+                  </button>
+                </div>
+                <div className="col" style={{ gap: 8 }}>
+                  <strong style={{ fontSize: 13 }}>Add it in Google Calendar</strong>
+                  <ol className="sub" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
+                    <li>Open Google Calendar on a computer.</li>
+                    <li>Next to Other calendars, click the plus, then From URL.</li>
+                    <li>Paste the feed link and click Add calendar.</li>
+                  </ol>
+                  <span className="sub">
+                    Google refreshes external feeds roughly every few hours, so a new event can take a
+                    while to appear. Changes made in Google do not flow back here.
+                  </span>
+                </div>
+              </>
+            ) : (
+              <div className="col" style={{ gap: 10 }}>
+                <p className="sub" style={{ margin: 0 }}>
+                  No feed link yet. Create one to get a private URL you can paste into Google Calendar.
+                </p>
+                <button className="btn btn-primary" onClick={() => void createFeed()} disabled={syncBusy}>
+                  {syncBusy ? "Creating…" : "Create feed link"}
+                </button>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
     </>
   );
 }

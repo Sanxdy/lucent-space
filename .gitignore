@@ -38,3 +38,6 @@ coverage/
 .nyc_output/
 playwright-report/
 test-results/
+
+# Local admin credentials for this instance
+ADMIN_CREDENTIALS.txt

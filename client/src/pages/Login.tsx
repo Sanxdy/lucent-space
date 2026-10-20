@@ -5,8 +5,8 @@ import { IconMark } from "../components/Icons";
 
 export function Login() {
   const { signIn } = useStore();
-  const [email, setEmail] = useState("maya@lucent.app");
-  const [password, setPassword] = useState("demo1234");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const passwordRef = useRef<HTMLInputElement>(null);
@@ -76,7 +76,6 @@ export function Login() {
         <p className="auth-alt">
           New here? <Link to="/register">Create an account</Link>
         </p>
-        <p className="auth-hint">Demo workspace · maya@lucent.app · demo1234</p>
       </div>
     </div>
   );

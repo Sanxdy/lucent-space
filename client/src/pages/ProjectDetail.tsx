@@ -170,7 +170,7 @@ export function ProjectDetail() {
             <div className="card-head"><h2>People</h2></div>
             {lead && (
               <div className="presence">
-                <Avatar name={lead.name} hue={lead.hue} size="lg" />
+                <Avatar name={lead.name} hue={lead.hue} avatar={lead.avatar} id={lead.id} size="lg" />
                 <span className="pv">
                   <strong>{lead.name}</strong>
                   <span>{lead.role} · project lead</span>
@@ -179,7 +179,7 @@ export function ProjectDetail() {
             )}
             {people.filter((member) => member.id !== lead?.id).map((member) => (
               <div key={member.id} className="presence">
-                <Avatar name={member.name} hue={member.hue} />
+                <Avatar name={member.name} hue={member.hue} avatar={member.avatar} id={member.id} />
                 <span className="pv">
                   <strong>{member.name}</strong>
                   <span>{member.role}</span>

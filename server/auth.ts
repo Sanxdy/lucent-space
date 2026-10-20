@@ -64,6 +64,7 @@ export type SessionUser = {
   location: string;
   tz_offset: number;
   hue: number;
+  avatar: string;
   workspace_id: string;
   workspace_name: string;
   is_admin: boolean;
@@ -120,7 +121,7 @@ export function currentUser(req: Request): SessionUser | undefined {
   const token = parseCookies(req)[SESSION_COOKIE];
   if (!token) return undefined;
   const found = row<Omit<SessionUser, "is_admin"> & { is_admin: number }>(
-    `SELECT u.id, u.email, u.name, u.role, u.team, u.location, u.tz_offset, u.hue,
+    `SELECT u.id, u.email, u.name, u.role, u.team, u.location, u.tz_offset, u.hue, u.avatar,
             m.workspace_id, w.name AS workspace_name, m.role = 'admin' AS is_admin
        FROM sessions s
        JOIN users u ON u.id = s.user_id

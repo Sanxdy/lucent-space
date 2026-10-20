@@ -64,6 +64,19 @@ export const api = {
     request<{ ok: true }>("/notifications/read", { method: "POST", body: JSON.stringify({ ids }) }),
   invite: (input: Record<string, unknown>) =>
     request<{ id: string; temporary_password: string }>("/members", { method: "POST", body: JSON.stringify(input) }),
+  removeMember: (id: string) => request<{ ok: true }>(`/members/${id}`, { method: "DELETE" }),
+  createTeam: (name: string) =>
+    request<{ id: string; name: string }>("/teams", { method: "POST", body: JSON.stringify({ name }) }),
+  deleteTeam: (id: string, moveTo?: string) =>
+    request<{ ok: true; moved: number }>(`/teams/${id}${moveTo ? `?move_to=${encodeURIComponent(moveTo)}` : ""}`, {
+      method: "DELETE",
+    }),
+  deleteProject: (id: string) => request<{ ok: true; unlinked_tasks: number }>(`/projects/${id}`, { method: "DELETE" }),
+  uploadAvatar: (dataUrl: string) =>
+    request<{ ok: true; avatar: string }>("/profile/avatar", { method: "POST", body: JSON.stringify({ data_url: dataUrl }) }),
+  deleteAvatar: () => request<{ ok: true }>("/profile/avatar", { method: "DELETE" }),
+  createCalendarToken: () => request<{ token: string }>("/calendar/token", { method: "POST" }),
+  revokeCalendarToken: () => request<{ ok: true }>("/calendar/token", { method: "DELETE" }),
   insights: (range: number) => request<Insights>(`/insights?range=${range}`),
   logFocus: (minutes: number, taskId?: string | null) =>
     request<{ ok: true }>("/focus", { method: "POST", body: JSON.stringify({ minutes, task_id: taskId }) }),

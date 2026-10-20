@@ -1,21 +1,11 @@
 import { useState } from "react";
 import { Seg } from "../components/Seg";
 import { useNavigate } from "react-router-dom";
+import { api } from "../api";
 import { useStore, useWorkspace } from "../store";
 import { AvatarStack } from "../components/Avatar";
 import { ProjectModal } from "../components/CreateModals";
-import {
-  IconCalendar,
-  IconChart,
-  IconFlame,
-  IconGrid,
-  IconLeaf,
-  IconPhone,
-  IconPlus,
-  IconProjects,
-  IconRocket,
-  IconShapes,
-} from "../components/Icons";
+import { IconCalendar, IconChart, IconFlame, IconGrid, IconLeaf, IconPhone, IconPlus, IconProjects, IconRocket, IconShapes, IconTrash } from "../components/Icons";
 import { dayLabel, isoDay } from "../lib/format";
 import type { ProjectStatus } from "../types";
 
@@ -56,10 +46,24 @@ function daysUntil(date: string) {
 
 export function Projects() {
   const workspace = useWorkspace();
-  const { updateProject } = useStore();
+  const { updateProject, me, toast, refresh } = useStore();
   const navigate = useNavigate();
   const [filter, setFilter] = useState<"all" | ProjectStatus>("all");
   const [modal, setModal] = useState(false);
+
+  const removeProject = async (project: { id: string; name: string; task_count: number }) => {
+    const warning = project.task_count
+      ? `Delete “${project.name}”? Its ${project.task_count} ${project.task_count === 1 ? "task stays" : "tasks stay"} and ${project.task_count === 1 ? "becomes" : "become"} unassigned to any project.`
+      : `Delete “${project.name}”?`;
+    if (!window.confirm(warning)) return;
+    try {
+      await api.deleteProject(project.id);
+      await refresh();
+      toast(`Project “${project.name}” deleted`);
+    } catch (caught) {
+      toast(caught instanceof Error ? caught.message : "Could not delete that project", "error");
+    }
+  };
 
   const inFlight = workspace.projects.filter((project) => project.status !== "shipped");
   const projects = workspace.projects
@@ -184,6 +188,20 @@ export function Projects() {
                 <span className="grow" />
                 {project.due_date && (
                   <span className="pc-due"><IconCalendar size={15} /> {dayLabel(project.due_date)}</span>
+                )}
+                {me?.is_admin && (
+                  <button
+                    className="btn-icon btn-icon-danger"
+                    aria-label={`Delete ${project.name}`}
+                    title={`Delete ${project.name}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void removeProject(project);
+                    }}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  >
+                    <IconTrash size={16} />
+                  </button>
                 )}
               </div>
             </article>

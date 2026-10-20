@@ -114,7 +114,7 @@ export function Tasks() {
             </span>
           )}
           <span className="right">
-            {assignee ? <Avatar name={assignee.name} hue={assignee.hue} size="sm" /> : <span className="dim">None</span>}
+            {assignee ? <Avatar name={assignee.name} hue={assignee.hue} avatar={assignee.avatar} id={assignee.id} size="sm" /> : <span className="dim">None</span>}
           </span>
         </div>
       </div>
@@ -181,7 +181,7 @@ export function Tasks() {
             ))}
           </select>
           <button className={`tk-chip ${mine ? "is-on" : ""}`} aria-pressed={mine} onClick={() => setMine((value) => !value)}>
-            <Avatar name={me?.name ?? "Me"} hue={me?.hue ?? 210} size="sm" />
+            <Avatar name={me?.name ?? "Me"} hue={me?.hue ?? 210} avatar={me?.avatar} id={me?.id} size="sm" />
             Mine only
           </button>
           <select

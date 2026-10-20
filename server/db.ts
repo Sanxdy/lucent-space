@@ -18,6 +18,25 @@ try {
 export const nowIso = () => new Date().toISOString();
 export const uid = () => crypto.randomUUID();
 
+/**
+ * Columns added after the first release. schema.sql uses CREATE TABLE IF NOT
+ * EXISTS, so it cannot alter an existing database; each one is tried in turn and
+ * ignored when it is already there.
+ */
+for (const sql of [
+  "ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE users ADD COLUMN avatar TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE users ADD COLUMN calendar_token TEXT",
+]) {
+  try {
+    db.exec(sql);
+  } catch {}
+}
+
+/** Avatar files live beside the database so a backup of data/ is complete. */
+export const avatarDir = join(dirname(dbPath), "avatars");
+mkdirSync(avatarDir, { recursive: true });
+
 /** Row helpers: node:sqlite returns null-prototype objects. */
 export function rows<T = Record<string, unknown>>(sql: string, ...params: unknown[]): T[] {
   return db.prepare(sql).all(...(params as never[])) as T[];

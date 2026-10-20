@@ -144,6 +144,28 @@ function NumberSetting({
   );
 }
 
+/**
+ * Shrink a picked photo to a 256px square JPEG in the browser, so the server
+ * needs no image library and the upload stays tiny.
+ */
+async function downscale(file: File): Promise<string> {
+  const bitmap = await createImageBitmap(file);
+  const side = Math.min(bitmap.width, bitmap.height);
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Could not read that image.");
+  // Centre-crop to a square, then scale down in one draw.
+  context.drawImage(
+    bitmap,
+    (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side,
+    0, 0, 256, 256,
+  );
+  bitmap.close();
+  return canvas.toDataURL("image/jpeg", 0.85);
+}
+
 export function Settings() {
   const { section = "profile" } = useParams();
   const workspace = useWorkspace();
@@ -155,7 +177,41 @@ export function Settings() {
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoError, setPhotoError] = useState("");
   const nameRef = useRef<HTMLInputElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const pickPhoto = async (file: File | undefined) => {
+    if (!file) return;
+    setPhotoBusy(true);
+    setPhotoError("");
+    try {
+      const dataUrl = await downscale(file);
+      await api.uploadAvatar(dataUrl);
+      await refresh();
+      toast("Photo updated");
+    } catch (caught) {
+      setPhotoError(caught instanceof Error ? caught.message : "Could not save that photo");
+    } finally {
+      setPhotoBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  const removePhoto = async () => {
+    setPhotoBusy(true);
+    setPhotoError("");
+    try {
+      await api.deleteAvatar();
+      await refresh();
+      toast("Photo removed");
+    } catch (caught) {
+      setPhotoError(caught instanceof Error ? caught.message : "Could not remove that photo");
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
 
   if (!SECTIONS.some((item) => item.id === section)) return <Navigate to="/settings/profile" replace />;
 
@@ -213,7 +269,7 @@ export function Settings() {
       <div className="settings-layout">
         <nav className="settings-nav glass" aria-label="Settings sections">
           <div className="sn-id">
-            <Avatar name={me?.name ?? ""} hue={me?.hue ?? 212} size="lg" />
+            <Avatar name={me?.name ?? ""} hue={me?.hue ?? 212} avatar={me?.avatar} id={me?.id} size="lg" />
             <div>
               <strong>{me?.name}</strong>
               <span>{me?.email}</span>
@@ -238,11 +294,39 @@ export function Settings() {
             <h2>Profile</h2>
             <p className="panel-desc">How the team sees you</p>
             <div className="profile-hero">
-              <Avatar name={me?.name ?? ""} hue={me?.hue ?? 212} size="xl" />
+              <button
+                type="button"
+                className="avatar-edit"
+                onClick={() => fileRef.current?.click()}
+                disabled={photoBusy}
+                aria-label={me?.avatar ? "Change profile photo" : "Add profile photo"}
+                title={me?.avatar ? "Change profile photo" : "Add profile photo"}
+              >
+                <Avatar name={me?.name ?? ""} hue={me?.hue ?? 212} avatar={me?.avatar} id={me?.id} size="xl" />
+                <span className="avatar-edit-badge">{photoBusy ? "…" : me?.avatar ? "Change" : "Add"}</span>
+              </button>
               <div>
                 <h3>{me?.name}</h3>
                 <span>{me?.role}</span>
                 <span>{me?.email}</span>
+                <div className="row" style={{ gap: 8, marginTop: 6 }}>
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    hidden
+                    onChange={(event) => void pickPhoto(event.target.files?.[0])}
+                  />
+                  <button type="button" className="btn btn-sm" onClick={() => fileRef.current?.click()} disabled={photoBusy}>
+                    {photoBusy ? "Uploading…" : me?.avatar ? "Change photo" : "Upload photo"}
+                  </button>
+                  {me?.avatar && (
+                    <button type="button" className="btn btn-sm btn-icon-danger" onClick={() => void removePhoto()} disabled={photoBusy}>
+                      Remove
+                    </button>
+                  )}
+                </div>
+                {photoError && <div className="auth-error" role="alert" style={{ marginTop: 8 }}>{photoError}</div>}
               </div>
             </div>
             <form className="panel-body" onSubmit={saveProfile}>

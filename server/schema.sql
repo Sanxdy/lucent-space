@@ -27,6 +27,21 @@ CREATE TABLE IF NOT EXISTS memberships (
   PRIMARY KEY (user_id, workspace_id)
 );
 
+-- Teams belong to the workspace so an admin can add and remove them.
+-- users.team stays a NAME string (no team_id) to avoid migrating existing rows,
+-- which makes the name the join key: deleting a team must move its people out
+-- first. ponytail: upgrade path is a users.team_id FK if renames are needed.
+CREATE TABLE IF NOT EXISTS teams (
+  id           TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  position     INTEGER NOT NULL DEFAULT 0,
+  created_at   TEXT NOT NULL,
+  UNIQUE (workspace_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_teams_ws ON teams(workspace_id, position);
+
 CREATE TABLE IF NOT EXISTS sessions (
   token_hash TEXT PRIMARY KEY,
   user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

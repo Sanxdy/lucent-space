@@ -130,7 +130,7 @@ export function Sidebar() {
           </div>
         )}
         <button className="account" onClick={() => setMenu((value) => !value)} aria-expanded={menu}>
-          <Avatar name={me?.name ?? "You"} hue={me?.hue} />
+          <Avatar name={me?.name ?? "You"} hue={me?.hue} avatar={me?.avatar} id={me?.id} />
           <span className="who">
             <strong>{me?.name}</strong>
             <span>{me?.role}</span>

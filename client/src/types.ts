@@ -13,6 +13,7 @@ export type Me = {
   location: string;
   tz_offset: number;
   hue: number;
+  avatar: string;
   workspace_id: string;
   workspace_name: string;
   is_admin: boolean;
@@ -27,6 +28,7 @@ export type Member = {
   location: string;
   tz_offset: number;
   hue: number;
+  avatar: string;
   workspace_role: string;
 };
 
@@ -112,10 +114,14 @@ export type Settings = {
   notify: Record<string, boolean>;
 };
 
+export type TeamRow = { id: string; name: string; position: number };
+
 export type Bootstrap = {
   me: Me;
   workspace: { id: string; name: string };
   members: Member[];
+  teams: TeamRow[];
+  calendar: { has_feed: boolean; token: string | null };
   projects: Project[];
   tasks: Task[];
   events: CalendarEvent[];

@@ -127,6 +127,10 @@
   transition: background var(--fast) var(--ease), color var(--fast) var(--ease), transform var(--fast) var(--ease);
 }
 .btn-icon:hover { background: var(--fill-hover); }
+/* Destructive affordance: inherits the icon button box, only the ink changes. */
+.btn-icon-danger { color: var(--danger); }
+.btn-icon-danger:hover { background: color-mix(in oklab, var(--danger) 14%, transparent); }
+.btn-icon-danger:disabled { color: var(--ink-3); background: none; cursor: not-allowed; }
 .btn-icon:active { transform: scale(0.94); }
 .btn-icon.sm { width: 32px; height: 32px; }
 .btn-icon.active { color: var(--accent-ink); background: var(--accent-soft); }
@@ -348,6 +352,40 @@
 .avatar.sm { width: 22px; height: 22px; font-size: 10.5px; }
 .avatar.lg { width: 40px; height: 40px; font-size: 14px; }
 .avatar.xl { width: 64px; height: 64px; font-size: 19px; }
+/* A photo fills the same circle the initials sit in, so every size works unchanged. */
+.avatar.has-photo { padding: 0; background: var(--glass-inset); }
+.avatar.has-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* Profile photo control: the avatar itself is the button. */
+.avatar-edit {
+  position: relative;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-radius: 50%;
+  flex: none;
+}
+.avatar-edit:disabled { cursor: progress; }
+.avatar-edit-badge {
+  position: absolute;
+  inset: auto 0 -6px 0;
+  margin: 0 auto;
+  width: max-content;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-2);
+  background: var(--glass-solid);
+  border: 1px solid var(--glass-border);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.avatar-edit:hover .avatar-edit-badge,
+.avatar-edit:focus-visible .avatar-edit-badge { opacity: 1; }
+
 .avatar-stack { display: flex; }
 .avatar-stack .avatar + .avatar { margin-left: -8px; }
 .avatar-stack .avatar { box-shadow: 0 0 0 2px var(--glass-solid); }

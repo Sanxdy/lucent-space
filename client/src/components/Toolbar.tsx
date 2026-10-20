@@ -131,7 +131,7 @@ export function Toolbar({ onSearch, onNavigate }: { onSearch: () => void; onNavi
         {unread > 0 && <span className="dot" />}
       </button>
       <button className="tbtn tbtn--me" onClick={() => onNavigate("/settings/profile")} aria-label="Account">
-        <Avatar name={me?.name ?? "You"} hue={me?.hue} size="sm" />
+        <Avatar name={me?.name ?? "You"} hue={me?.hue} avatar={me?.avatar} id={me?.id} size="sm" />
       </button>
 
       {panel === "create" && (

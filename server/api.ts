@@ -1,7 +1,9 @@
 import { Router } from "express";
 import type { Request } from "express";
-import { randomBytes } from "node:crypto";
-import { row, rows, run, uid, nowIso, tx, isoDay } from "./db.js";
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { avatarDir, row, rows, run, uid, nowIso, tx, isoDay } from "./db.js";
 import {
   createSession,
   currentUser,
@@ -275,10 +277,16 @@ api.get("/bootstrap", requireUser, (req, res) => {
     actor.id, isoDay(),
   );
 
+  const calendarToken = row<{ calendar_token: string | null }>("SELECT calendar_token FROM users WHERE id = ?", actor.id);
+
   res.json({
     me: actor,
     workspace: { id: workspaceId, name: actor.workspace_name },
+    calendar: { has_feed: !!calendarToken?.calendar_token, token: calendarToken?.calendar_token ?? null },
     members,
+    teams: rows<{ id: string; name: string; position: number }>(
+      "SELECT id, name, position FROM teams WHERE workspace_id = ? ORDER BY position, name", workspaceId,
+    ),
     projects,
     tasks,
     events: rows("SELECT * FROM events WHERE workspace_id = ? ORDER BY starts_at", workspaceId),
@@ -485,6 +493,29 @@ api.patch("/projects/:id", requireUser, (req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ * Admin-only: delete a project. Its milestones cascade away; its tasks survive
+ * with project_id cleared (ON DELETE SET NULL) so nobody loses work silently.
+ * The response reports how many tasks were unlinked.
+ */
+api.delete("/projects/:id", requireUser, (req, res) => {
+  const actor = me(req);
+  if (!actor.is_admin) return res.status(403).json({ error: "Only workspace admins can delete projects." });
+  const project = row<{ id: string; name: string }>(
+    "SELECT id, name FROM projects WHERE id = ? AND workspace_id = ?", String(req.params.id), actor.workspace_id,
+  );
+  if (!project) return res.status(404).json({ error: "Project not found." });
+  const unlinked = rows<{ id: string }>(
+    "SELECT id FROM tasks WHERE project_id = ? AND workspace_id = ?", project.id, actor.workspace_id,
+  ).length;
+
+  tx(() => {
+    run("DELETE FROM projects WHERE id = ?", project.id);
+    logActivity(actor.workspace_id, actor.id, "deleted project", project.name, "/projects");
+  });
+  res.json({ ok: true, unlinked_tasks: unlinked });
+});
+
 /* --------------------------------- events -------------------------------- */
 
 api.post("/events", requireUser, (req, res) => {
@@ -531,6 +562,218 @@ api.patch("/settings", requireUser, (req, res) => {
       WHERE user_id = ?`,
     next.theme, next.wall, next.glass, next.accent, next.solid, next.focus_minutes, next.break_minutes, next.notify, actor.id,
   );
+  res.json({ ok: true });
+});
+
+/**
+ * Save an avatar. The browser downscales to 256px and sends a data URL, so the
+ * server never needs an image library: validate the magic bytes, cap the size,
+ * write the file, bump a version string so the <img> cache busts.
+ */
+api.post("/profile/avatar", requireUser, (req, res) => {
+  const actor = me(req);
+  const dataUrl = typeof req.body?.data_url === "string" ? req.body.data_url : "";
+  const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
+  if (!match) return res.status(400).json({ error: "Send a PNG, JPEG or WebP image." });
+  const [, ext, base64] = match;
+  const bytes = Buffer.from(base64, "base64");
+  if (bytes.length < 64) return res.status(400).json({ error: "That image looks empty." });
+  if (bytes.length > 300_000) return res.status(413).json({ error: "Keep the image under 300 KB." });
+
+  // Trust the magic bytes, not the declared mime type.
+  const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+  const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const isWebp = bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP";
+  if (!(isPng || isJpeg || isWebp)) return res.status(400).json({ error: "That file is not a real image." });
+
+  // One file per user, so replacing a photo cannot leave orphans behind.
+  for (const stale of ["png", "jpeg", "webp"]) {
+    const path = join(avatarDir, `${actor.id}.${stale}`);
+    if (existsSync(path)) {
+      try { unlinkSync(path); } catch {}
+    }
+  }
+  writeFileSync(join(avatarDir, `${actor.id}.${ext}`), bytes);
+  const version = String(Date.now());
+  run("UPDATE users SET avatar = ? WHERE id = ?", version, actor.id);
+  res.status(201).json({ ok: true, avatar: version });
+});
+
+api.delete("/profile/avatar", requireUser, (req, res) => {
+  const actor = me(req);
+  for (const ext of ["png", "jpeg", "webp"]) {
+    const path = join(avatarDir, `${actor.id}.${ext}`);
+    if (existsSync(path)) {
+      try { unlinkSync(path); } catch {}
+    }
+  }
+  run("UPDATE users SET avatar = '' WHERE id = ?", actor.id);
+  res.json({ ok: true });
+});
+
+/**
+ * Serve an avatar. Behind requireUser because a photo is only for teammates;
+ * the version in the URL lets the browser cache it forever.
+ */
+api.get("/avatars/:id", requireUser, (req, res) => {
+  const actor = me(req);
+  const id = String(req.params.id);
+  if (!row("SELECT 1 AS ok FROM memberships WHERE user_id = ? AND workspace_id = ?", id, actor.workspace_id)) {
+    return res.status(404).end();
+  }
+  for (const [ext, mime] of [["png", "image/png"], ["jpeg", "image/jpeg"], ["webp", "image/webp"]] as const) {
+    const path = join(avatarDir, `${id}.${ext}`);
+    if (existsSync(path)) {
+      res.setHeader("Content-Type", mime);
+      res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+      return res.end(readFileSync(path));
+    }
+  }
+  res.status(404).end();
+});
+
+/* ----------------------------- calendar feed ----------------------------- */
+
+/** ICS text escaping, per RFC 5545 section 3.3.11. */
+function icsText(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,")
+    .replace(/\r?\n/g, "\\n");
+}
+
+/** Fold to 75 octets per line, continuing with a single leading space. */
+function icsFold(line: string): string {
+  const bytes = Buffer.from(line, "utf8");
+  if (bytes.length <= 75) return line;
+  const out: string[] = [];
+  let start = 0;
+  let limit = 75;
+  while (start < bytes.length) {
+    let end = Math.min(start + limit, bytes.length);
+    // Never split a multi-byte character: back off to a UTF-8 boundary.
+    while (end < bytes.length && (bytes[end] & 0xc0) === 0x80) end--;
+    out.push((start === 0 ? "" : " ") + bytes.subarray(start, end).toString("utf8"));
+    start = end;
+    limit = 74;
+  }
+  return out.join("\r\n");
+}
+
+/**
+ * Read-only feed so Google Calendar (or any ICS client) can subscribe.
+ * starts_at is stored as naive local time, which is exactly what an ICS value
+ * without a Z suffix or TZID means: floating local time.
+ */
+function buildCalendar(workspaceId: string, workspaceName: string): string {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const events = rows<{ id: string; title: string; starts_at: string; duration_min: number; location: string; kind: string }>(
+    "SELECT id, title, starts_at, duration_min, location, kind FROM events WHERE workspace_id = ? ORDER BY starts_at",
+    workspaceId,
+  );
+  const dueTasks = rows<{ id: string; title: string; due_date: string; status: string }>(
+    "SELECT id, title, due_date, status FROM tasks WHERE workspace_id = ? AND archived = 0 AND status != 'done' AND due_date IS NOT NULL",
+    workspaceId,
+  );
+
+  const lines: string[] = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Lucent//Workspace//EN",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+    `X-WR-CALNAME:${icsText(workspaceName)}`,
+  ];
+
+  const pad = (n: number) => String(n).padStart(2, "0");
+
+  /**
+   * Stored value is naive local "YYYY-MM-DDTHH:mm"; ICS wants "YYYYMMDDTHHMMSS".
+   * Seconds are not stored, so they are always 00.
+   */
+  const compact = (value: string) => {
+    const [day, time = "00:00"] = value.split("T");
+    const [hour, minute = "00"] = time.split(":");
+    return `${day.replace(/-/g, "")}T${pad(Number(hour))}${pad(Number(minute))}00`;
+  };
+
+  /**
+   * Add minutes in LOCAL time. Building the Date from components and reading it
+   * back the same way keeps it floating; toISOString would shift it to UTC.
+   */
+  const addMinutes = (value: string, minutes: number) => {
+    const [day, time = "00:00"] = value.split("T");
+    const [year, month, date] = day.split("-").map(Number);
+    const [hour, minute] = time.split(":").map(Number);
+    const shifted = new Date(year, month - 1, date, hour, minute + minutes);
+    return `${shifted.getFullYear()}${pad(shifted.getMonth() + 1)}${pad(shifted.getDate())}`
+      + `T${pad(shifted.getHours())}${pad(shifted.getMinutes())}00`;
+  };
+
+  for (const event of events) {
+    lines.push(
+      "BEGIN:VEVENT",
+      `UID:${event.id}@lucent`,
+      `DTSTAMP:${stamp}`,
+      `DTSTART:${compact(event.starts_at)}`,
+      `DTEND:${addMinutes(event.starts_at, event.duration_min || 30)}`,
+      `SUMMARY:${icsText(event.title)}`,
+    );
+    if (event.location) lines.push(`LOCATION:${icsText(event.location)}`);
+    lines.push(`CATEGORIES:${icsText(event.kind)}`, "END:VEVENT");
+  }
+
+  // Task due dates appear on the app's calendar too, so carry them across as
+  // all-day events rather than letting the feed disagree with the product.
+  for (const task of dueTasks) {
+    const day = task.due_date.slice(0, 10).replace(/-/g, "");
+    lines.push(
+      "BEGIN:VEVENT",
+      `UID:task-${task.id}@lucent`,
+      `DTSTAMP:${stamp}`,
+      `DTSTART;VALUE=DATE:${day}`,
+      `SUMMARY:${icsText(`Due: ${task.title}`)}`,
+      "TRANSP:TRANSPARENT",
+      "END:VEVENT",
+    );
+  }
+
+  lines.push("END:VCALENDAR");
+  return lines.map(icsFold).join("\r\n") + "\r\n";
+}
+
+/**
+ * Public, token-guarded feed. It deliberately skips requireUser: Google fetches
+ * this URL with no cookie. The token is per-user and revocable.
+ */
+api.get("/calendar.ics", (req, res) => {
+  const token = typeof req.query.token === "string" ? req.query.token.trim() : "";
+  if (!token) return res.status(401).json({ error: "A calendar token is required." });
+  const owner = row<{ workspace_id: string; workspace_name: string }>(
+    `SELECT m.workspace_id, w.name AS workspace_name
+       FROM users u JOIN memberships m ON m.user_id = u.id JOIN workspaces w ON w.id = m.workspace_id
+      WHERE u.calendar_token = ?`,
+    token,
+  );
+  if (!owner) return res.status(401).json({ error: "That calendar token is not valid." });
+  res.setHeader("Content-Type", "text/calendar; charset=utf-8");
+  res.setHeader("Content-Disposition", 'inline; filename="lucent.ics"');
+  res.setHeader("Cache-Control", "no-cache");
+  res.end(buildCalendar(owner.workspace_id, owner.workspace_name));
+});
+
+/** Mint (or rotate) the feed token for the signed-in user. */
+api.post("/calendar/token", requireUser, (req, res) => {
+  const actor = me(req);
+  const token = randomBytes(24).toString("base64url");
+  run("UPDATE users SET calendar_token = ? WHERE id = ?", token, actor.id);
+  res.status(201).json({ token });
+});
+
+api.delete("/calendar/token", requireUser, (req, res) => {
+  const actor = me(req);
+  run("UPDATE users SET calendar_token = NULL WHERE id = ?", actor.id);
   res.json({ ok: true });
 });
 
@@ -582,6 +825,10 @@ api.post("/members", requireUser, async (req, res) => {
   if (row("SELECT 1 AS ok FROM users WHERE email = ?", email)) {
     return res.status(409).json({ error: "Someone with that email is already here." });
   }
+  const teamName = text(req.body?.team, 40) || "Product";
+  if (!row("SELECT 1 AS ok FROM teams WHERE workspace_id = ? AND name = ?", actor.workspace_id, teamName)) {
+    return res.status(400).json({ error: "Pick a team that exists in this workspace." });
+  }
   const id = uid();
   const temporaryPassword = randomBytes(9).toString("base64url");
   const passwordHash = await hashPassword(temporaryPassword);
@@ -590,7 +837,7 @@ api.post("/members", requireUser, async (req, res) => {
       `INSERT INTO users (id, email, name, password_hash, role, team, location, tz_offset, hue, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id, email, name, passwordHash, text(req.body?.role, 80) || "Team member",
-      text(req.body?.team, 40) || "Product", text(req.body?.location, 80),
+      teamName, text(req.body?.location, 80),
       Math.min(840, Math.max(-720, num(req.body?.tz_offset) ?? 0)),
       Math.floor(Math.random() * 360), nowIso(),
     );
@@ -599,6 +846,111 @@ api.post("/members", requireUser, async (req, res) => {
     logActivity(actor.workspace_id, actor.id, "invited", name, "/team");
   });
   res.status(201).json({ id, temporary_password: temporaryPassword });
+});
+
+/**
+ * Remove someone from the workspace. Their tasks survive with the assignee
+ * cleared (ON DELETE SET NULL), so no work disappears with the person.
+ * Two guards: you cannot remove yourself, and you cannot remove the last admin.
+ */
+api.delete("/members/:id", requireUser, (req, res) => {
+  const actor = me(req);
+  if (!actor.is_admin) return res.status(403).json({ error: "Only workspace admins can remove people." });
+  const targetId = String(req.params.id);
+  const target = row<{ id: string; name: string; role: string; is_admin: number }>(
+    `SELECT u.id, u.name, m.role, m.role = 'admin' AS is_admin
+       FROM users u JOIN memberships m ON m.user_id = u.id
+      WHERE u.id = ? AND m.workspace_id = ?`,
+    targetId, actor.workspace_id,
+  );
+  if (!target) return res.status(404).json({ error: "That person isn’t in this workspace." });
+  if (target.id === actor.id) return res.status(400).json({ error: "You can’t remove yourself." });
+  if (target.is_admin) {
+    const admins = row<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM memberships WHERE workspace_id = ? AND role = 'admin'", actor.workspace_id,
+    );
+    if ((admins?.n ?? 0) <= 1) return res.status(400).json({ error: "A workspace needs at least one admin." });
+  }
+
+  tx(() => {
+    run("DELETE FROM memberships WHERE user_id = ? AND workspace_id = ?", targetId, actor.workspace_id);
+    run("DELETE FROM sessions WHERE user_id = ?", targetId);
+    // A user row with no membership anywhere is unreachable; drop it so the
+    // email can be invited again later.
+    if (!row("SELECT 1 AS ok FROM memberships WHERE user_id = ?", targetId)) {
+      run("DELETE FROM users WHERE id = ?", targetId);
+    }
+    logActivity(actor.workspace_id, actor.id, "removed", target.name, "/team");
+  });
+  res.json({ ok: true });
+});
+
+/* --------------------------------- teams --------------------------------- */
+
+/** Admin-only: add a team so it appears in the invite picker and the filters. */
+api.post("/teams", requireUser, (req, res) => {
+  const actor = me(req);
+  if (!actor.is_admin) return res.status(403).json({ error: "Only workspace admins can add teams." });
+  const name = text(req.body?.name, 40);
+  if (name.length < 2) return res.status(400).json({ error: "Give the team a name." });
+  if (row("SELECT 1 AS ok FROM teams WHERE workspace_id = ? AND lower(name) = lower(?)", actor.workspace_id, name)) {
+    return res.status(409).json({ error: "That team already exists." });
+  }
+  const id = uid();
+  const position = row<{ n: number }>("SELECT COALESCE(MAX(position), -1) + 1 AS n FROM teams WHERE workspace_id = ?", actor.workspace_id)?.n ?? 0;
+  run(
+    "INSERT INTO teams (id, workspace_id, name, position, created_at) VALUES (?, ?, ?, ?, ?)",
+    id, actor.workspace_id, name, position, nowIso(),
+  );
+  logActivity(actor.workspace_id, actor.id, "created team", name, "/team");
+  res.status(201).json({ id, name });
+});
+
+/**
+ * Admin-only: delete a team. Members are not silently reassigned, because that
+ * would move people somewhere nobody chose. Pass ?move_to=<teamId> to move them,
+ * or empty the team first.
+ */
+api.delete("/teams/:id", requireUser, (req, res) => {
+  const actor = me(req);
+  if (!actor.is_admin) return res.status(403).json({ error: "Only workspace admins can delete teams." });
+  const team = row<{ id: string; name: string }>(
+    "SELECT id, name FROM teams WHERE id = ? AND workspace_id = ?", String(req.params.id), actor.workspace_id,
+  );
+  if (!team) return res.status(404).json({ error: "That team isn’t in this workspace." });
+
+  const memberIds = rows<{ id: string }>(
+    "SELECT u.id FROM users u JOIN memberships m ON m.user_id = u.id WHERE m.workspace_id = ? AND u.team = ?",
+    actor.workspace_id, team.name,
+  ).map((r) => r.id);
+
+  const moveToId = idOf(req.query.move_to);
+  if (memberIds.length && !moveToId) {
+    return res.status(400).json({
+      error: `That team still has ${memberIds.length} ${memberIds.length === 1 ? "person" : "people"}. Move them to another team first.`,
+      member_count: memberIds.length,
+    });
+  }
+
+  let moveTo: { id: string; name: string } | undefined;
+  if (moveToId) {
+    moveTo = row<{ id: string; name: string }>(
+      "SELECT id, name FROM teams WHERE id = ? AND workspace_id = ?", moveToId, actor.workspace_id,
+    );
+    if (!moveTo) return res.status(400).json({ error: "Pick a team in this workspace to move people to." });
+    if (moveTo.id === team.id) return res.status(400).json({ error: "You can’t move people into the team you’re deleting." });
+  }
+
+  tx(() => {
+    if (moveTo) {
+      for (const id of memberIds) run("UPDATE users SET team = ? WHERE id = ?", moveTo.name, id);
+    }
+    run("DELETE FROM teams WHERE id = ?", team.id);
+    logActivity(
+      actor.workspace_id, actor.id, "deleted team", team.name, "/team",
+    );
+  });
+  res.json({ ok: true, moved: moveTo ? memberIds.length : 0 });
 });
 
 /* -------------------------------- insights ------------------------------- */
