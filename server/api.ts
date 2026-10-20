@@ -3,7 +3,7 @@ import type { Request } from "express";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { avatarDir, row, rows, run, uid, nowIso, tx, isoDay } from "./db.js";
+import { DEFAULT_TEAMS, avatarDir, row, rows, run, uid, nowIso, tx, isoDay } from "./db.js";
 import {
   createSession,
   currentUser,
@@ -24,6 +24,8 @@ import { projectColor } from "./palette.js";
 export const api = Router();
 
 const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/** Bearer token lifetime. Long enough for a bridge, short enough to expire. */
+const TOKEN_DAYS = 30;
 const text = (value: unknown, max = 400) => (typeof value === "string" ? value.trim().slice(0, max) : "");
 const oneOf = <T extends string>(value: unknown, options: readonly T[], fallback: T): T =>
   options.includes(value as T) ? (value as T) : fallback;
@@ -157,6 +159,14 @@ api.post("/auth/register", loginRateLimit, async (req, res) => {
     run("INSERT INTO memberships (user_id, workspace_id, role) VALUES (?, ?, ?)", id, workspace.id, first ? "admin" : "member");
     run("INSERT INTO settings (user_id) VALUES (?)", id);
     logActivity(workspace.id, id, "joined", "the workspace");
+    // backfillTeams() ran at boot, before this workspace existed, so a workspace born
+    // here would otherwise have an empty team registry and no team to invite into.
+    if (first) {
+      DEFAULT_TEAMS.forEach((name, position) => {
+        run("INSERT OR IGNORE INTO teams (id, workspace_id, name, position, created_at) VALUES (?, ?, ?, ?, ?)",
+            uid(), workspace!.id, name, position, nowIso());
+      });
+    }
   });
 
   createSession(res, id);
@@ -193,6 +203,44 @@ api.get("/auth/me", (req, res) => {
   res.json({ user: current ?? null });
 });
 
+/**
+ * Mint a bearer token for clients that never hold a cookie. Accepts either an
+ * existing session or credentials, and sets no cookie: the raw token is returned
+ * once and only its sha256 is stored, so a database leak yields nothing usable.
+ */
+api.post("/auth/token", loginRateLimit, async (req, res) => {
+  let userId = currentUser(req)?.id;
+  if (!userId) {
+    const email = text(req.body?.email, 160).toLowerCase();
+    const password = typeof req.body?.password === "string" ? req.body.password : "";
+    const found = row<{ id: string; password_hash: string }>(
+      "SELECT id, password_hash FROM users WHERE email = ?", email,
+    );
+    if (!found || !(await verifyPassword(password, found.password_hash))) {
+      return res.status(401).json({ error: "Email or password is incorrect." });
+    }
+    resetLoginAttempts(req);
+    userId = found.id;
+  }
+  const token = randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + TOKEN_DAYS * 86_400_000).toISOString();
+  run(
+    "INSERT INTO api_tokens (token_hash, user_id, name, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+    createHash("sha256").update(token).digest("hex"), userId,
+    text(req.body?.name, 80) || "API token", expiresAt, nowIso(),
+  );
+  res.status(201).json({ token, user_id: userId, expires_at: expiresAt });
+});
+
+/** Revoke the bearer token that made this request. */
+api.delete("/auth/token", requireUser, (req, res) => {
+  const bearer = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "").trim();
+  if (bearer) {
+    run("DELETE FROM api_tokens WHERE token_hash = ?", createHash("sha256").update(bearer).digest("hex"));
+  }
+  res.json({ ok: true });
+});
+
 /* ------------------------------- bootstrap ------------------------------- */
 
 api.get("/bootstrap", requireUser, (req, res) => {
@@ -200,7 +248,8 @@ api.get("/bootstrap", requireUser, (req, res) => {
   const workspaceId = actor.workspace_id;
 
   const members = rows(
-    `SELECT u.id, u.name, u.email, u.role, u.team, u.location, u.tz_offset, u.hue, m.role AS workspace_role
+    `SELECT u.id, u.name, u.email, u.role, u.team, u.location, u.tz_offset, u.hue, u.avatar,
+            m.role AS workspace_role
        FROM users u JOIN memberships m ON m.user_id = u.id
       WHERE m.workspace_id = ? ORDER BY u.created_at`,
     workspaceId,
@@ -307,6 +356,42 @@ api.get("/bootstrap", requireUser, (req, res) => {
 });
 
 /* --------------------------------- tasks --------------------------------- */
+
+/**
+ * Narrow task list for polling clients. /bootstrap is the only other bulk read and
+ * is far too large to poll, so this returns just the rows and no joins.
+ */
+api.get("/tasks", requireUser, (req, res) => {
+  const actor = me(req);
+  const assignee = req.query.assignee === "me" ? actor.id : idOf(req.query.assignee);
+  const rawStatus = String(req.query.status ?? "");
+  const status = (TASK_STATUS as readonly string[]).includes(rawStatus) ? rawStatus : "";
+  const projectId = idOf(req.query.project_id);
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100));
+
+  const where = ["workspace_id = ?", "archived = 0"];
+  const params: unknown[] = [actor.workspace_id];
+  if (assignee) {
+    assertInWorkspace("users", assignee, actor.workspace_id);
+    where.push("assignee_id = ?");
+    params.push(assignee);
+  }
+  if (status) { where.push("status = ?"); params.push(status); }
+  if (projectId) {
+    assertInWorkspace("projects", projectId, actor.workspace_id);
+    where.push("project_id = ?");
+    params.push(projectId);
+  }
+
+  res.json({
+    tasks: rows(
+      `SELECT id, title, description, status, priority, project_id, assignee_id,
+              created_by, created_at, done_at
+         FROM tasks WHERE ${where.join(" AND ")} ORDER BY position LIMIT ?`,
+      ...params, limit,
+    ),
+  });
+});
 
 api.post("/tasks", requireUser, (req, res) => {
   const actor = me(req);
@@ -782,11 +867,22 @@ api.patch("/profile", requireUser, (req, res) => {
   const name = text(req.body?.name, 80);
   const email = text(req.body?.email, 160).toLowerCase();
   const role = text(req.body?.role, 80);
+  const team = text(req.body?.team, 40);
   if (name.length < 2) return res.status(400).json({ error: "Your name can’t be empty." });
   if (!emailRe.test(email)) return res.status(400).json({ error: "That email doesn’t look right." });
+  if (team && !row("SELECT 1 AS ok FROM teams WHERE workspace_id = ? AND lower(name) = lower(?)",
+                   actor.workspace_id, team)) {
+    return res.status(400).json({ error: "Pick a team that exists in this workspace." });
+  }
   const clash = row("SELECT 1 AS ok FROM users WHERE email = ? AND id != ?", email, actor.id);
   if (clash) return res.status(409).json({ error: "That email is already in use." });
-  run("UPDATE users SET name = ?, email = ?, role = ? WHERE id = ?", name, email, role || actor.role, actor.id);
+  // An omitted team keeps the current one; the name is stored as the team spells it.
+  const resolved = team
+    ? row<{ name: string }>("SELECT name FROM teams WHERE workspace_id = ? AND lower(name) = lower(?)",
+                            actor.workspace_id, team)?.name ?? team
+    : actor.team;
+  run("UPDATE users SET name = ?, email = ?, role = ?, team = ? WHERE id = ?",
+      name, email, role || actor.role, resolved, actor.id);
   res.json({ ok: true });
 });
 

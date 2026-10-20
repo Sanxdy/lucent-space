@@ -118,18 +118,31 @@ export function parseCookies(req: Request): Record<string, string> {
 }
 
 export function currentUser(req: Request): SessionUser | undefined {
-  const token = parseCookies(req)[SESSION_COOKIE];
-  if (!token) return undefined;
+  // Two credential kinds resolve to the same SessionUser: a browser cookie, and a
+  // bearer token for clients that never open a page. A bearer wins when both are
+  // present, so a stale cookie cannot mask an explicit token.
+  const bearer = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "").trim();
+  const cookie = parseCookies(req)[SESSION_COOKIE];
+  if (!bearer && !cookie) return undefined;
+
+  const sql = bearer
+    ? `SELECT u.id, u.email, u.name, u.role, u.team, u.location, u.tz_offset, u.hue, u.avatar,
+              m.workspace_id, w.name AS workspace_name, m.role = 'admin' AS is_admin
+         FROM api_tokens t
+         JOIN users u ON u.id = t.user_id
+         JOIN memberships m ON m.user_id = u.id
+         JOIN workspaces w ON w.id = m.workspace_id
+        WHERE t.token_hash = ? AND t.expires_at > ?`
+    : `SELECT u.id, u.email, u.name, u.role, u.team, u.location, u.tz_offset, u.hue, u.avatar,
+              m.workspace_id, w.name AS workspace_name, m.role = 'admin' AS is_admin
+         FROM sessions s
+         JOIN users u ON u.id = s.user_id
+         JOIN memberships m ON m.user_id = u.id
+         JOIN workspaces w ON w.id = m.workspace_id
+        WHERE s.token_hash = ? AND s.expires_at > ?`;
+
   const found = row<Omit<SessionUser, "is_admin"> & { is_admin: number }>(
-    `SELECT u.id, u.email, u.name, u.role, u.team, u.location, u.tz_offset, u.hue, u.avatar,
-            m.workspace_id, w.name AS workspace_name, m.role = 'admin' AS is_admin
-       FROM sessions s
-       JOIN users u ON u.id = s.user_id
-       JOIN memberships m ON m.user_id = u.id
-       JOIN workspaces w ON w.id = m.workspace_id
-      WHERE s.token_hash = ? AND s.expires_at > ?`,
-    sha256(token),
-    nowIso(),
+    sql, sha256(bearer || cookie), nowIso(),
   );
   return found ? { ...found, is_admin: !!found.is_admin } : undefined;
 }
@@ -151,6 +164,16 @@ export function user(req: Request): SessionUser {
 /** Same-origin guard for state-changing requests. */
 export function originGuard(req: Request, res: Response, next: NextFunction) {
   if (req.method === "GET" || req.method === "HEAD") return next();
+  // A bearer token is an explicit credential chosen by the client, not an ambient one
+  // the browser attaches on its own, so it carries no CSRF risk. Only cookie sessions
+  // need the origin check.
+  if (req.headers.authorization) return next();
+  // Minting a token from credentials is the same case: the caller has to know the
+  // password, so there is no ambient authority to abuse. With a cookie present the
+  // request IS ambient, so it keeps the origin check - that keeps a hostile page from
+  // minting a token off a victim's session.
+  // originGuard is mounted at the app root, so req.path still carries the /api prefix.
+  if (req.path.replace(/^\/api/, "") === "/auth/token" && !parseCookies(req)[SESSION_COOKIE]) return next();
   const origin = req.headers.origin;
   if (origin) {
     try {

@@ -72,3 +72,35 @@ export function tx<T>(fn: () => T): T {
     depth = 0;
   }
 }
+
+/**
+ * Teams used to be a hardcoded list in the invite form. Backfill the registry so a
+ * fresh workspace has the five defaults an admin can then edit, and so any team name
+ * already in use by a member exists as a row. Idempotent, so it is safe on every boot.
+ */
+export const DEFAULT_TEAMS = ["Product", "Design", "Engineering", "Marketing", "Operations"];
+
+export function backfillTeams() {
+  const workspaces = rows<{ id: string }>("SELECT id FROM workspaces");
+  for (const workspace of workspaces) {
+    const existing = new Set(
+      rows<{ name: string }>("SELECT name FROM teams WHERE workspace_id = ?", workspace.id).map((t) => t.name),
+    );
+    const inUse = rows<{ team: string }>(
+      "SELECT DISTINCT u.team FROM users u JOIN memberships m ON m.user_id = u.id WHERE m.workspace_id = ?",
+      workspace.id,
+    ).map((r) => r.team);
+    const wanted = [...new Set([...DEFAULT_TEAMS, ...inUse])].filter((name) => name && !existing.has(name));
+    if (!wanted.length) continue;
+    let position = existing.size;
+    tx(() => {
+      for (const name of wanted) {
+        run(
+          "INSERT OR IGNORE INTO teams (id, workspace_id, name, position, created_at) VALUES (?, ?, ?, ?, ?)",
+          uid(), workspace.id, name, position++, nowIso(),
+        );
+      }
+    });
+  }
+}
+

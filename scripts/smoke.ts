@@ -115,6 +115,69 @@ try {
 
   const login = await call("POST", "/api/auth/login", { email, password: "smoketest123" });
   check("login works after logout", login.status === 200 && cookie.length > 0, login.data);
+
+  // ---- bearer tokens: a bridge client never holds a cookie --------------------
+  async function bearer(method: string, path: string, token: string, body?: unknown) {
+    const res = await fetch(`${BASE}${path}`, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        // Deliberately no Origin and no Cookie: this is how a bot calls the API.
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const text = await res.text();
+    let data: any = text;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      /* not json */
+    }
+    return { status: res.status, data, setCookie: res.headers.getSetCookie?.() ?? [] };
+  }
+
+  const minted = await bearer("POST", "/api/auth/token", "", { email, password: "smoketest123", name: "smoke bridge" });
+  const token: string = minted.data?.token ?? "";
+  check("token mints from credentials without a cookie", minted.status === 201 && token.length > 20, minted.data);
+  check("minting sets no session cookie", minted.setCookie.every((c) => !c.startsWith("lucent_session=")), minted.setCookie);
+  check("token response reports an expiry", typeof minted.data?.expires_at === "string", minted.data);
+
+  const tokenMe = await bearer("GET", "/api/auth/me", token);
+  check("bearer resolves to the same user", tokenMe.status === 200 && tokenMe.data.user?.email === email, tokenMe.data);
+
+  // Any member may create a task; this proves a bearer write clears the origin guard
+  // without needing admin rights.
+  const tokenWrite = await bearer("POST", "/api/tasks", token, { title: `Bearer task ${Date.now()}` });
+  check("a bearer write passes the origin guard with no Origin", tokenWrite.status === 201, tokenWrite.data);
+
+  const listed = await bearer("GET", "/api/tasks?assignee=me&status=todo&limit=5", token);
+  check("narrow task list answers for the bearer",
+    listed.status === 200 && Array.isArray(listed.data.tasks) && listed.data.tasks.length <= 5, listed.data);
+
+  const badFilter = await bearer("GET", "/api/tasks?status=nonsense", token);
+  check("an unknown status filter is ignored rather than erroring", badFilter.status === 200, badFilter.data);
+
+  // "product" lowercase must resolve to the seeded "Product" team.
+  const teamPatch = await bearer("PATCH", "/api/profile", token, { name: "Smoke Tester", email, team: "product" });
+  check("profile accepts a team case-insensitively", teamPatch.status === 200, teamPatch.data);
+  const afterTeam = await call("GET", "/api/auth/me");
+  check("the team was stored with the registry spelling", afterTeam.data.user?.team, "Product");
+
+  const badTeam = await bearer("PATCH", "/api/profile", token, { name: "Smoke Tester", email, team: "No Such Team" });
+  check("profile rejects an unknown team", badTeam.status === 400, badTeam.data);
+
+  const revoked = await bearer("DELETE", "/api/auth/token", token);
+  check("token revokes", revoked.status === 200, revoked.data);
+  const afterRevoke = await bearer("GET", "/api/auth/me", token);
+  check("a revoked token no longer authenticates", afterRevoke.status === 200 && afterRevoke.data.user === null, afterRevoke.data);
+
+  const cookieStillWorks = await call("GET", "/api/auth/me");
+  check("the cookie session is unaffected by token flows", cookieStillWorks.data.user?.email === email, cookieStillWorks.data);
+
+  const photos = await call("GET", "/api/bootstrap");
+  const memberKeys = Object.keys(photos.data.members?.[0] ?? {});
+  check("bootstrap members expose avatar", memberKeys.includes("avatar"), memberKeys);
 } catch (error) {
   failures += 1;
   console.error(error);

@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { api } from "./api.js";
 import { originGuard } from "./auth.js";
-import { db } from "./db.js";
+import { backfillTeams, db } from "./db.js";
 import { seed } from "./seed.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -13,6 +13,9 @@ const clientDir = join(root, "dist", "client");
 const production = process.env.NODE_ENV === "production";
 
 await seed();
+// Runs after seed(), not at module load: seed() is what creates the workspace, and a
+// team registry backfilled before that would have nothing to backfill.
+backfillTeams();
 
 const app = express();
 if (process.env.TRUST_PROXY === "1") app.set("trust proxy", 1);

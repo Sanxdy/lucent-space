@@ -178,3 +178,15 @@ CREATE INDEX IF NOT EXISTS idx_notifications_ws ON notifications(workspace_id, c
 CREATE INDEX IF NOT EXISTS idx_focus_user_ended ON focus_sessions(user_id, ended_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+
+-- Bearer tokens for non-browser clients. Stored as sha256 like sessions, so a
+-- database leak does not hand out working credentials.
+CREATE TABLE IF NOT EXISTS api_tokens (
+  token_hash TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL DEFAULT '',
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
