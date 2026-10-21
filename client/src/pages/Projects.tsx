@@ -78,7 +78,12 @@ export function Projects() {
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || a.position - b.position);
   const shipped = workspace.projects.length - inFlight.length;
   const active = workspace.projects.filter((project) => project.status === "active" || project.status === "review").length;
-  const onTrack = Math.round((inFlight.filter((project) => project.progress >= 25).length / Math.max(1, inFlight.length)) * 100);
+  // A project with no tasks is neither on nor off track; counting it as off track made
+  // a mostly-empty workspace look like everything was failing.
+  const started = inFlight.filter((project) => project.task_count > 0);
+  const onTrack = started.length
+    ? Math.round((started.filter((project) => project.progress >= 25).length / started.length) * 100)
+    : 0;
   const monthKey = isoDay(new Date()).slice(0, 7);
   const dueThisMonth = workspace.projects.filter((project) => project.due_date?.startsWith(monthKey)).length;
 
@@ -100,7 +105,9 @@ export function Projects() {
           </article>
           <article className="stat glass">
             <span className="stat-label">On track</span>
-            <div className="stat-value">{onTrack}<small>%</small></div>
+            <div className="stat-value">
+              {started.length ? <>{onTrack}<small>%</small></> : <span className="stat-empty">No tasks yet</span>}
+            </div>
           </article>
           <article className="stat glass">
             <span className="stat-label">Due this month</span>
@@ -163,18 +170,20 @@ export function Projects() {
               </div>
               <p className="pc-desc">{project.description}</p>
               <div className="pc-next">
-                <div className="pc-donut">
+                <div className={`pc-donut${project.task_count === 0 ? " is-empty" : ""}`}>
                   <svg viewBox="0 0 64 64" aria-hidden>
                     <circle className="pc-track" cx="32" cy="32" r="26" />
-                    <circle
-                      className="pc-arc"
-                      cx="32"
-                      cy="32"
-                      r="26"
-                      strokeDasharray={`${(project.progress / 100) * 2 * Math.PI * 26} ${2 * Math.PI * 26}`}
-                    />
+                    {project.task_count > 0 && (
+                      <circle
+                        className="pc-arc"
+                        cx="32"
+                        cy="32"
+                        r="26"
+                        strokeDasharray={`${(project.progress / 100) * 2 * Math.PI * 26} ${2 * Math.PI * 26}`}
+                      />
+                    )}
                   </svg>
-                  <b>{project.progress}%</b>
+                  <b>{project.task_count === 0 ? "—" : `${project.progress}%`}</b>
                 </div>
                 <div className="pc-next-copy">
                   <span className="pc-k">{project.status === "shipped" ? "Shipped" : "Next milestone"}</span>
@@ -184,7 +193,9 @@ export function Projects() {
               </div>
               <div className="pc-foot">
                 <AvatarStack people={people} max={4} />
-                <span className="pv">{project.done_count}/{project.task_count} tasks</span>
+                <span className="pv">
+                  {project.task_count === 0 ? "No tasks yet" : `${project.done_count}/${project.task_count} tasks`}
+                </span>
                 <span className="grow" />
                 {project.due_date && (
                   <span className="pc-due"><IconCalendar size={15} /> {dayLabel(project.due_date)}</span>

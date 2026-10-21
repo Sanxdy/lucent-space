@@ -1,4 +1,6 @@
-import type { Bootstrap, Insights, Me, Project, Task } from "./types";
+import type {
+  GoogleCalendarStatus,
+  GoogleEvent, Bootstrap, Insights, Me, Project, Task } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -65,6 +67,10 @@ export const api = {
   invite: (input: Record<string, unknown>) =>
     request<{ id: string; temporary_password: string }>("/members", { method: "POST", body: JSON.stringify(input) }),
   removeMember: (id: string) => request<{ ok: true }>(`/members/${id}`, { method: "DELETE" }),
+  updateMember: (id: string, patch: Partial<{
+    name: string; email: string; role: string; team: string;
+    location: string; tz_offset: number; workspace_role: "admin" | "member";
+  }>) => request<{ ok: true }>(`/members/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   createTeam: (name: string) =>
     request<{ id: string; name: string }>("/teams", { method: "POST", body: JSON.stringify({ name }) }),
   deleteTeam: (id: string, moveTo?: string) =>
@@ -77,6 +83,21 @@ export const api = {
   deleteAvatar: () => request<{ ok: true }>("/profile/avatar", { method: "DELETE" }),
   createCalendarToken: () => request<{ token: string }>("/calendar/token", { method: "POST" }),
   revokeCalendarToken: () => request<{ ok: true }>("/calendar/token", { method: "DELETE" }),
+
+  // Google Calendar -> Lucent (import)
+  getGoogleCalendar: () => request<GoogleCalendarStatus>("/calendar/google"),
+  connectGoogleCalendar: (url: string) =>
+    request<{ ok: true; event_count: number }>("/calendar/google", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+  syncGoogleCalendar: () =>
+    request<{ ok: true; event_count: number }>("/calendar/google/sync", { method: "POST" }),
+  disconnectGoogleCalendar: () => request<{ ok: true }>("/calendar/google", { method: "DELETE" }),
+  googleCalendarEvents: (from: string, to: string) =>
+    request<{ events: GoogleEvent[] }>(
+      `/calendar/google/events?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+    ),
   insights: (range: number) => request<Insights>(`/insights?range=${range}`),
   logFocus: (minutes: number, taskId?: string | null) =>
     request<{ ok: true }>("/focus", { method: "POST", body: JSON.stringify({ minutes, task_id: taskId }) }),

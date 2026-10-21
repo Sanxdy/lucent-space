@@ -129,6 +129,19 @@ CREATE TABLE IF NOT EXISTS events (
   created_by   TEXT REFERENCES users(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS external_events (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title      TEXT NOT NULL,
+  starts_at  TEXT NOT NULL,
+  ends_at    TEXT NOT NULL,
+  all_day    INTEGER NOT NULL DEFAULT 0,
+  location   TEXT NOT NULL DEFAULT '',
+  synced_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_external_events_user ON external_events(user_id, starts_at);
+
 CREATE TABLE IF NOT EXISTS notifications (
   id           TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,

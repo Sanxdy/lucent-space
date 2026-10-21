@@ -219,7 +219,7 @@
 
 .page-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto);
   grid-template-areas: "lead actions" "stats stats";
   align-items: center;
   gap: clamp(14px, 1.2vw, 18px) clamp(16px, 2vw, 32px);
@@ -242,6 +242,42 @@
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+}
+/* A workspace can have many teams, so the filter row scrolls instead of widening the
+   page. Wrapping is not an option: .seg-pill is absolutely positioned with height:100%
+   and would stretch across both rows.
+   A clipped row gives no hint that more filters exist, so the edge fades only while
+   there is something hidden in that direction. */
+.page-head .head-actions > .filter-scroll {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+.page-head .head-actions > .filter-scroll::-webkit-scrollbar { display: none; }
+.page-head .head-actions > .filter-scroll > .seg {
+  max-width: none;
+  width: max-content;
+}
+.page-head .head-actions > .filter-scroll.is-overflowing {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 22px, #000 calc(100% - 22px), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 22px, #000 calc(100% - 22px), transparent 100%);
+}
+.page-head .head-actions > .filter-scroll.is-overflowing.at-start {
+  -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 22px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 22px), transparent 100%);
+}
+.page-head .head-actions > .filter-scroll.is-overflowing.at-end {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 22px, #000 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 22px, #000 100%);
+}
+.page-head .head-actions > .filter-scroll.is-overflowing.at-start.at-end {
+  -webkit-mask-image: none;
+  mask-image: none;
 }
 
 @media (min-width: 1360px) {
@@ -399,8 +435,8 @@
   z-index: 100;
   display: flex;
   justify-content: center;
-  align-items: flex-start;
-  padding: 12vh 20px 20px;
+  align-items: center;
+  padding: 20px;
   background: rgb(4 4 8 / 0.42);
   -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);

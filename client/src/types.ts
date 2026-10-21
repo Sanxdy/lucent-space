@@ -32,6 +32,25 @@ export type Member = {
   workspace_role: string;
 };
 
+/** State of the Google Calendar import, as the Calendar page needs it. */
+export type GoogleCalendarStatus = {
+  connected: boolean;
+  masked: string;
+  last_sync: string | null;
+  error: string;
+  event_count: number;
+};
+
+/** An event imported from Google. Read-only: Lucent never writes back to Google. */
+export type GoogleEvent = {
+  id: string;
+  title: string;
+  starts_at: string;
+  ends_at: string;
+  all_day: number;
+  location: string;
+};
+
 export type Subtask = { id: string; task_id: string; title: string; done: boolean; position: number };
 export type Comment = { id: string; task_id: string; user_id: string | null; body: string; created_at: string };
 
@@ -135,16 +154,18 @@ export type Insights = {
   range: number;
   stats: {
     completed: { value: number; delta: number };
-    onTime: { value: number; delta: number };
+    /** value is null when no task in the period had a deadline. */
+    onTime: { value: number | null; hasData: boolean; delta: number | null };
     focus: { value: number; delta: number };
-    cycle: { value: number; delta: number };
+    /** unit is 'h' for sub-day cycles, 'd' otherwise. */
+    cycle: { value: number; unit: "h" | "d"; delta: number | null };
   };
   buckets: string[];
   current: number[];
   previous: number[];
   focusSeries: number[];
   projects: { id: string; name: string; color: string; done: number }[];
-  onTimeSplit: { ok: number; late: number };
+  onTimeSplit: { ok: number; late: number; undated: number };
   workload: { id: string; name: string; hue: number; team: string; role: string; load: number; cap: number; open: number }[];
   slowest: { id: string; title: string; age: number; late: boolean; due_date: string | null }[];
   table: { id: string; title: string; project: string; assignee: string; done_at: string | null; on_time: boolean; estimate: number | null }[];

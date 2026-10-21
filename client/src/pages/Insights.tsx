@@ -108,15 +108,24 @@ export function Insights() {
           </article>
           <article className="stat glass">
             <span className="stat-label">On-time rate</span>
-            <div className="stat-value">{stats.onTime.value}<small>%</small><Delta value={stats.onTime.delta} suffix=" pts" /></div>
+            <div className="stat-value">
+              {stats.onTime.hasData ? <>{stats.onTime.value}<small>%</small></> : <span className="stat-empty">No deadlines</span>}
+              {stats.onTime.delta !== null && <Delta value={stats.onTime.delta} suffix=" pts" />}
+            </div>
           </article>
           <article className="stat glass">
             <span className="stat-label">Focus hours</span>
-            <div className="stat-value">{stats.focus.value}<small>h</small><Delta value={stats.focus.delta} suffix="%" /></div>
+            <div className="stat-value">
+              {stats.focus.value > 0 ? <>{stats.focus.value}<small>h</small></> : <span className="stat-empty">Not tracked</span>}
+              {stats.focus.value > 0 && <Delta value={stats.focus.delta} suffix="%" />}
+            </div>
           </article>
           <article className="stat glass">
             <span className="stat-label">Avg cycle time</span>
-            <div className="stat-value">{stats.cycle.value}<small>d</small><Delta value={stats.cycle.delta} suffix="d" invert /></div>
+            <div className="stat-value">
+              {stats.cycle.value}<small>{stats.cycle.unit}</small>
+              {stats.cycle.delta !== null && <Delta value={stats.cycle.delta} suffix={stats.cycle.unit} invert />}
+            </div>
           </article>
         </div>
         <div className="head-actions">
@@ -221,13 +230,21 @@ export function Insights() {
               <span className="hint">{period}</span>
             </div>
             <div className="ins-sum">
-              <b>{stats.focus.value}</b> hours
-              <span>about {(stats.focus.value / range).toFixed(1)}h a day</span>
+              {stats.focus.value > 0 ? (
+                <>
+                  <b>{stats.focus.value}</b> hours
+                  <span>about {(stats.focus.value / range).toFixed(1)}h a day</span>
+                </>
+              ) : (
+                <span>Nothing tracked yet</span>
+              )}
             </div>
             {data.focusSeries.some((value) => value > 0) ? (
               <Bars values={data.focusSeries} labels={data.buckets} height={214} />
             ) : (
-              <div className="empty">No focus sessions in this period.</div>
+              <div className="empty">
+                No focus sessions in this period. Start one from the timer on Home and this fills in.
+              </div>
             )}
           </section>
 
@@ -244,6 +261,11 @@ export function Insights() {
               <span><i className="cap" /> Capacity</span>
               <span><i className="over" /> Over capacity</span>
             </div>
+            {data.workload.every((member) => member.load === 0) ? (
+              <div className="empty">
+                No open tasks are assigned, so there is no load to show. Assign a task and it appears here.
+              </div>
+            ) : (
             <div className="workload">
               {data.workload
                 .slice()
@@ -269,6 +291,7 @@ export function Insights() {
                   </div>
                 ))}
             </div>
+            )}
           </section>
       </div>
 
@@ -281,17 +304,34 @@ export function Insights() {
               </div>
             </div>
             <div className="row" style={{ gap: 14, marginBottom: 10 }}>
-              <span style={{ fontFamily: "var(--font-display)", fontSize: 30, fontWeight: 700, letterSpacing: "-0.02em" }}>{stats.onTime.value}%</span>
-              <span className="dim" style={{ fontSize: 12.5 }}>{data.onTimeSplit.ok} on time · {data.onTimeSplit.late} late</span>
+              <span style={{ fontFamily: "var(--font-display)", fontSize: 30, fontWeight: 700, letterSpacing: "-0.02em" }}>
+                {stats.onTime.hasData ? `${stats.onTime.value}%` : "—"}
+              </span>
+              <span className="dim" style={{ fontSize: 12.5 }}>
+                {stats.onTime.hasData
+                  ? `${data.onTimeSplit.ok} on time · ${data.onTimeSplit.late} late`
+                  : `${data.onTimeSplit.undated} finished without a deadline`}
+              </span>
             </div>
-            <div className="splitbar">
-              <i style={{ width: `${(data.onTimeSplit.ok / totalSplit) * 100}%`, background: "var(--ok)" }} />
-              <i style={{ width: `${(data.onTimeSplit.late / totalSplit) * 100}%`, background: "var(--danger)" }} />
-            </div>
-            <div className="legend" style={{ marginTop: 12 }}>
-              <div className="li"><i style={{ background: "var(--ok)" }} /> On time <span>{data.onTimeSplit.ok}</span></div>
-              <div className="li"><i style={{ background: "var(--danger)" }} /> Late <span>{data.onTimeSplit.late}</span></div>
-            </div>
+            {stats.onTime.hasData ? (
+              <>
+                <div className="splitbar">
+                  <i style={{ width: `${(data.onTimeSplit.ok / totalSplit) * 100}%`, background: "var(--ok)" }} />
+                  <i style={{ width: `${(data.onTimeSplit.late / totalSplit) * 100}%`, background: "var(--danger)" }} />
+                </div>
+                <div className="legend" style={{ marginTop: 12 }}>
+                  <div className="li"><i style={{ background: "var(--ok)" }} /> On time <span>{data.onTimeSplit.ok}</span></div>
+                  <div className="li"><i style={{ background: "var(--danger)" }} /> Late <span>{data.onTimeSplit.late}</span></div>
+                  {data.onTimeSplit.undated > 0 && (
+                    <div className="li"><i style={{ background: "var(--text-4)" }} /> No deadline <span>{data.onTimeSplit.undated}</span></div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <p className="dim" style={{ fontSize: 12.5, margin: 0 }}>
+                Add a due date to a task and this starts measuring whether work lands on time.
+              </p>
+            )}
           </section>
       </div>
 

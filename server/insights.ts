@@ -40,8 +40,19 @@ export function buildInsights(workspaceId: string, range: 7 | 30 | 90) {
   const previous = done.filter((t) => inWindow(t.done_at, prevStartIso, isoDay(new Date(start.getTime() - DAY))));
 
   const onTime = (t: TaskRow) => !!t.due_date && !!t.done_at && t.done_at.slice(0, 10) <= t.due_date;
-  const rate = current.length ? Math.round((current.filter(onTime).length / current.length) * 100) : 0;
-  const prevRate = previous.length ? Math.round((previous.filter(onTime).length / previous.length) * 100) : 0;
+
+  /**
+   * Only tasks that actually had a deadline can be early or late. Counting undated
+   * tasks as late made a workspace with four finished, deadline-free tasks report
+   * "0% on time, 4 late", which reads as a broken report rather than as no data.
+   */
+  const rateOf = (list: TaskRow[]): number | null => {
+    const dated = list.filter((t) => !!t.due_date);
+    if (!dated.length) return null;
+    return Math.round((dated.filter(onTime).length / dated.length) * 100);
+  };
+  const rate = rateOf(current);
+  const prevRate = rateOf(previous);
 
   const focusRows = rows<{ minutes: number; ended_at: string }>(
     `SELECT f.minutes, f.ended_at FROM focus_sessions f
@@ -63,6 +74,17 @@ export function buildInsights(workspaceId: string, range: 7 | 30 | 90) {
   };
   const cycleDays = cycle(current);
   const prevCycleDays = cycle(previous);
+
+  /**
+   * Work finished in minutes rounds to 0.0 days, which looks like the report is not
+   * updating at all. Below a day the figure is shown in hours instead.
+   */
+  const presentCycle = (days: number) =>
+    days > 0 && days < 1
+      ? { value: Math.round(days * 240) / 10, unit: "h" as const }
+      : { value: Math.round(days * 10) / 10, unit: "d" as const };
+  const cycleNow = presentCycle(cycleDays);
+  const cyclePrev = presentCycle(prevCycleDays);
 
   const weekly = range === 90;
   const buckets: { label: string; from: string; to: string }[] = [];
@@ -143,16 +165,31 @@ export function buildInsights(workspaceId: string, range: 7 | 30 | 90) {
     range,
     stats: {
       completed: { value: current.length, delta: current.length - previous.length },
-      onTime: { value: rate, delta: rate - prevRate },
+      onTime: {
+        value: rate,
+        // null means "no task had a deadline", which is not the same as 0%.
+        hasData: rate !== null,
+        delta: rate !== null && prevRate !== null ? rate - prevRate : null,
+      },
       focus: { value: Math.round(focusHours * 10) / 10, delta: Math.round((focusHours - prevFocusHours) * 10) / 10 },
-      cycle: { value: Math.round(cycleDays * 10) / 10, delta: Math.round((cycleDays - prevCycleDays) * 10) / 10 },
+      cycle: {
+        value: cycleNow.value,
+        unit: cycleNow.unit,
+        // Only comparable when both periods used the same unit.
+        delta: cycleNow.unit === cyclePrev.unit ? Math.round((cycleNow.value - cyclePrev.value) * 10) / 10 : null,
+      },
     },
     buckets: buckets.map((b) => b.label),
     current: currentSeries,
     previous: previousSeries,
     focusSeries,
     projects: byProject,
-    onTimeSplit: { ok: current.filter(onTime).length, late: current.length - current.filter(onTime).length },
+    onTimeSplit: {
+      ok: current.filter(onTime).length,
+      late: current.filter((t) => !!t.due_date && !onTime(t)).length,
+      // Finished without a deadline: reported so the numbers add up to `completed`.
+      undated: current.filter((t) => !t.due_date).length,
+    },
     workload,
     slowest,
     table,

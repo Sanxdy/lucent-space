@@ -93,6 +93,8 @@
   --warn: #fbbf24;
   --danger: #fb7185;
   --info: #7dd3fc;
+  /* Google Calendar's own blue, used to mark imported events. */
+  --google: #8ab4f8;
   --on-ok: #06210f;
   --on-danger: #2a0710;
 
@@ -176,6 +178,7 @@
   --shadow: 0 1px 2px rgb(20 25 40 / 0.06), 0 22px 44px -24px rgb(30 40 70 / 0.3);
 
   --ok: #166534;
+  --google: #1a73e8;
   --warn: #92400e;
   --danger: #be123c;
   --info: #0369a1;

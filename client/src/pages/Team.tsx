@@ -1,10 +1,11 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Seg } from "../components/Seg";
 import { api } from "../api";
 import { useStore, useWorkspace } from "../store";
+import type { Member } from "../types";
 import { Avatar } from "../components/Avatar";
 import { Modal } from "../components/Modal";
-import { IconMessage, IconMoon, IconSun, IconTeam, IconTrash, IconUser } from "../components/Icons";
+import { IconMessage, IconMoon, IconPencil, IconSun, IconTeam, IconTrash, IconUser } from "../components/Icons";
 import { memberTime, timezoneRelation } from "../lib/format";
 
 // ponytail: presence and capacity are derived from the member id so the demo looks alive; swap for real heartbeats and contracted hours when sessions go realtime.
@@ -47,6 +48,23 @@ export function Team() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [teamModal, setTeamModal] = useState(false);
+  const [editing, setEditing] = useState<Member | null>(null);
+  const [editForm, setEditForm] = useState({ name: "", email: "", role: "", team: "", location: "", tz_offset: "0", workspace_role: "member" });
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState("");
+  const filterRef = useRef<HTMLDivElement>(null);
+  const [filtersOverflow, setFiltersOverflow] = useState(false);
+  const [atStart, setAtStart] = useState(true);
+  const [atEnd, setAtEnd] = useState(true);
+
+  const updateFilterEdges = () => {
+    const el = filterRef.current;
+    if (!el) return;
+    const overflow = el.scrollWidth > el.clientWidth + 1;
+    setFiltersOverflow(overflow);
+    setAtStart(el.scrollLeft <= 1);
+    setAtEnd(el.scrollLeft + el.clientWidth >= el.scrollWidth - 1);
+  };
   const [newTeam, setNewTeam] = useState("");
   const [teamBusy, setTeamBusy] = useState(false);
   const [teamError, setTeamError] = useState("");
@@ -100,6 +118,45 @@ export function Team() {
     }
   };
 
+  const openEdit = (member: Member) => {
+    setEditForm({
+      name: member.name,
+      email: member.email,
+      role: member.role,
+      team: member.team,
+      location: member.location,
+      tz_offset: String(member.tz_offset),
+      workspace_role: member.workspace_role === "admin" ? "admin" : "member",
+    });
+    setEditError("");
+    setEditing(member);
+  };
+
+  const saveEdit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!editing) return;
+    setEditBusy(true);
+    setEditError("");
+    try {
+      await api.updateMember(editing.id, {
+        name: editForm.name.trim(),
+        email: editForm.email.trim(),
+        role: editForm.role.trim(),
+        team: editForm.team,
+        location: editForm.location.trim(),
+        tz_offset: Number(editForm.tz_offset) || 0,
+        workspace_role: editForm.workspace_role === "admin" ? "admin" : "member",
+      });
+      await refresh();
+      toast(`${editForm.name.trim()} updated`);
+      setEditing(null);
+    } catch (caught) {
+      setEditError(caught instanceof Error ? caught.message : "Could not save those changes");
+    } finally {
+      setEditBusy(false);
+    }
+  };
+
   const removeMember = async (member: { id: string; name: string }) => {
     if (!window.confirm(`Remove ${member.name} from this workspace? Their tasks stay and become unassigned.`)) return;
     try {
@@ -110,6 +167,15 @@ export function Team() {
       toast(caught instanceof Error ? caught.message : "Could not remove them", "error");
     }
   };
+  useEffect(() => {
+    updateFilterEdges();
+    const el = filterRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(updateFilterEdges);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [teams.length]);
+
   const openTasks = workspace.tasks.filter((task) => task.status !== "done");
   const online = workspace.members.filter((member) => statusOf(member).label === "Online").length;
   const inFocus = workspace.members.filter((member) => statusOf(member).label === "In focus").length;
@@ -159,13 +225,19 @@ export function Team() {
           </article>
         </div>
         <div className="head-actions">
-          <Seg>
-            {teams.map((name) => (
-              <button key={name} aria-pressed={team === name} onClick={() => setTeam(name)}>
-                {name}
-              </button>
-            ))}
-          </Seg>
+          <div
+            className={`filter-scroll${filtersOverflow ? " is-overflowing" : ""}${atStart ? " at-start" : ""}${atEnd ? " at-end" : ""}`}
+            ref={filterRef}
+            onScroll={updateFilterEdges}
+          >
+            <Seg>
+              {teams.map((name) => (
+                <button key={name} aria-pressed={team === name} onClick={() => setTeam(name)}>
+                  {name}
+                </button>
+              ))}
+            </Seg>
+          </div>
           {me?.is_admin && (
             <>
               <button className="btn" onClick={() => { setTeamModal(true); setTeamError(""); }}>
@@ -198,11 +270,11 @@ export function Team() {
                     {member.id === me?.id && <span className="you">You</span>}
                   </strong>
                   <span>{member.role}</span>
-                  <span className="pchip" style={{ ["--hue" as string]: `hsl(${member.hue} 70% 55%)` }}>
-                    <i /> {member.team}
-                  </span>
                 </div>
               </div>
+              <span className="pchip" style={{ ["--hue" as string]: `hsl(${member.hue} 70% 55%)` }}>
+                <i /> <span className="pchip-t">{member.team}</span>
+              </span>
               <div className="mc-when">
                 <span className={`presence ${status.cls}`}><i /> {status.label}</span>
                 <span className="mc-time">
@@ -233,6 +305,16 @@ export function Team() {
                 <a className="btn-icon" href={`mailto:${member.email}`} aria-label={`Message ${member.name}`}>
                   <IconMessage size={16} />
                 </a>
+                {me?.is_admin && (
+                  <button
+                    className="btn-icon"
+                    aria-label={`Edit ${member.name}`}
+                    title={`Edit ${member.name}`}
+                    onClick={() => openEdit(member)}
+                  >
+                    <IconPencil size={16} />
+                  </button>
+                )}
                 {me?.is_admin && member.id !== me.id && (
                   <button
                     className="btn-icon btn-icon-danger"
@@ -248,6 +330,96 @@ export function Team() {
           );
         })}
       </section>
+
+      {editing && (
+        <Modal
+          title={`Edit ${editing.name}`}
+          onClose={() => setEditing(null)}
+          footer={
+            <>
+              <button type="button" className="btn" onClick={() => setEditing(null)}>Cancel</button>
+              <button type="submit" form="edit-member" className="btn btn-primary" disabled={editBusy}>
+                {editBusy ? "Saving…" : "Save changes"}
+              </button>
+            </>
+          }
+        >
+          <form id="edit-member" className="col" style={{ gap: 14 }} onSubmit={saveEdit}>
+            {editError && <div className="auth-error" role="alert">{editError}</div>}
+
+            <div className="field">
+              <label htmlFor="edit-name">Name</label>
+              <input
+                id="edit-name"
+                className="input"
+                value={editForm.name}
+                onChange={(event) => setEditForm({ ...editForm, name: event.target.value })}
+                required
+              />
+            </div>
+
+            <div className="field">
+              <label htmlFor="edit-email">Email</label>
+              <input
+                id="edit-email"
+                className="input"
+                type="email"
+                value={editForm.email}
+                onChange={(event) => setEditForm({ ...editForm, email: event.target.value })}
+                required
+              />
+            </div>
+
+            <div className="field">
+              <label htmlFor="edit-role">Job title</label>
+              <input
+                id="edit-role"
+                className="input"
+                value={editForm.role}
+                onChange={(event) => setEditForm({ ...editForm, role: event.target.value })}
+              />
+            </div>
+
+            <div className="field">
+              <label htmlFor="edit-team">Team</label>
+              <select
+                id="edit-team"
+                className="select"
+                value={editForm.team}
+                onChange={(event) => setEditForm({ ...editForm, team: event.target.value })}
+              >
+                {registry.map((row) => (
+                  <option key={row.id} value={row.name}>{row.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="field">
+              <label htmlFor="edit-location">Location</label>
+              <input
+                id="edit-location"
+                className="input"
+                value={editForm.location}
+                onChange={(event) => setEditForm({ ...editForm, location: event.target.value })}
+                placeholder="City, Country"
+              />
+            </div>
+
+            <div className="field">
+              <label htmlFor="edit-workspace-role">Workspace role</label>
+              <select
+                id="edit-workspace-role"
+                className="select"
+                value={editForm.workspace_role}
+                onChange={(event) => setEditForm({ ...editForm, workspace_role: event.target.value })}
+              >
+                <option value="member">Member</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+          </form>
+        </Modal>
+      )}
 
       {teamModal && (
         <Modal

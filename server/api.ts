@@ -5,6 +5,10 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_TEAMS, avatarDir, row, rows, run, uid, nowIso, tx, isoDay } from "./db.js";
 import {
+  FeedError, disconnect as gcalDisconnect, eventsBetween, maskFeedUrl,
+  syncUser, validateFeedUrl,
+} from "./gcal.js";
+import {
   createSession,
   currentUser,
   destroySession,
@@ -136,7 +140,13 @@ api.post("/auth/register", loginRateLimit, async (req, res) => {
     }
     return res.status(409).json({ error: "An account with that email already exists." });
   }
-  if (!OPEN_REGISTRATION) {
+  /**
+   * A brand-new install has no accounts, so closing registration would lock everyone
+   * out of their own server. The first account to register becomes the workspace admin;
+   * after that, registration follows the normal rule.
+   */
+  const firstRun = !row("SELECT 1 AS ok FROM users LIMIT 1");
+  if (!OPEN_REGISTRATION && !firstRun) {
     return res.status(403).json({ error: "Registration is closed. Ask a workspace admin for an invite." });
   }
 
@@ -146,6 +156,7 @@ api.post("/auth/register", loginRateLimit, async (req, res) => {
 
   tx(() => {
     let workspace = row<{ id: string }>("SELECT id FROM workspaces ORDER BY created_at LIMIT 1");
+    // No workspace yet means this is the first account on this server.
     const first = !workspace;
     if (!workspace) {
       workspace = { id: uid() };
@@ -862,6 +873,102 @@ api.delete("/calendar/token", requireUser, (req, res) => {
   res.json({ ok: true });
 });
 
+/* -------------------------- google calendar import ------------------------ */
+
+/** What the Calendar page needs to show the connection state. */
+api.get("/calendar/google", requireUser, (req, res) => {
+  const actor = me(req);
+  const found = row<{
+    google_calendar_url: string | null;
+    google_calendar_synced_at: string | null;
+    google_calendar_error: string;
+  }>(
+    "SELECT google_calendar_url, google_calendar_synced_at, google_calendar_error FROM users WHERE id = ?",
+    actor.id,
+  );
+  const count = row<{ n: number }>(
+    "SELECT COUNT(*) AS n FROM external_events WHERE user_id = ?", actor.id,
+  );
+  res.json({
+    connected: Boolean(found?.google_calendar_url),
+    masked: found?.google_calendar_url ? maskFeedUrl(found.google_calendar_url) : "",
+    last_sync: found?.google_calendar_synced_at ?? null,
+    error: found?.google_calendar_error ?? "",
+    event_count: count?.n ?? 0,
+  });
+});
+
+/**
+ * Connect a Google calendar by its secret iCal address. The feed is fetched straight
+ * away so a wrong address is rejected while the person is still looking at the form,
+ * rather than failing silently on the next background refresh.
+ */
+api.post("/calendar/google", requireUser, async (req, res) => {
+  const actor = me(req);
+  let url: string;
+  try {
+    url = validateFeedUrl(req.body?.url);
+  } catch (error) {
+    if (error instanceof FeedError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+
+  try {
+    const count = await syncUser(actor.id, url);
+    run("UPDATE users SET google_calendar_url = ? WHERE id = ?", url, actor.id);
+    return res.status(201).json({ ok: true, event_count: count });
+  } catch (error) {
+    if (error instanceof FeedError) {
+      // Do not store a URL that does not work.
+      return res.status(400).json({ error: error.message });
+    }
+    throw error;
+  }
+});
+
+/** Refresh on demand, for the Sync button. */
+api.post("/calendar/google/sync", requireUser, async (req, res) => {
+  const actor = me(req);
+  const found = row<{ google_calendar_url: string | null }>(
+    "SELECT google_calendar_url FROM users WHERE id = ?", actor.id,
+  );
+  if (!found?.google_calendar_url) return res.status(400).json({ error: "No Google calendar is connected." });
+  try {
+    const count = await syncUser(actor.id, found.google_calendar_url);
+    res.json({ ok: true, event_count: count });
+  } catch (error) {
+    if (error instanceof FeedError) {
+      run("UPDATE users SET google_calendar_error = ? WHERE id = ?", error.message, actor.id);
+      return res.status(502).json({ error: error.message });
+    }
+    throw error;
+  }
+});
+
+api.delete("/calendar/google", requireUser, (req, res) => {
+  gcalDisconnect(me(req).id);
+  res.json({ ok: true });
+});
+
+/** Imported events for a visible range, so the calendar does not bloat /bootstrap. */
+api.get("/calendar/google/events", requireUser, (req, res) => {
+  const actor = me(req);
+  const from = typeof req.query.from === "string" ? req.query.from : "";
+  const to = typeof req.query.to === "string" ? req.query.to : "";
+  const fromDate = new Date(from);
+  const toDate = new Date(to);
+  if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+    return res.status(400).json({ error: "from and to must be ISO dates." });
+  }
+  // A range wider than a year is a client bug, not a request worth serving.
+  if (toDate.getTime() - fromDate.getTime() > 400 * 86_400_000) {
+    return res.status(400).json({ error: "That range is too wide." });
+  }
+  res.json({
+    events: eventsBetween(actor.id, fromDate.toISOString(), toDate.toISOString()),
+  });
+});
+
 api.patch("/profile", requireUser, (req, res) => {
   const actor = me(req);
   const name = text(req.body?.name, 80);
@@ -977,6 +1084,91 @@ api.delete("/members/:id", requireUser, (req, res) => {
       run("DELETE FROM users WHERE id = ?", targetId);
     }
     logActivity(actor.workspace_id, actor.id, "removed", target.name, "/team");
+  });
+  res.json({ ok: true });
+});
+
+/**
+ * Admin-only: change someone's details. Admins can fix a misspelled name, move a
+ * person between teams, correct their job title, or promote and demote them.
+ *
+ * Two guards keep an admin from locking the workspace: you cannot take away your own
+ * admin rights while you are the only admin, and the last admin cannot be demoted.
+ */
+api.patch("/members/:id", requireUser, (req, res) => {
+  const actor = me(req);
+  if (!actor.is_admin) return res.status(403).json({ error: "Only workspace admins can change people." });
+  const targetId = String(req.params.id);
+  const target = row<{ id: string; name: string; email: string; is_admin: number }>(
+    `SELECT u.id, u.name, u.email, m.role = 'admin' AS is_admin
+       FROM users u JOIN memberships m ON m.user_id = u.id
+      WHERE u.id = ? AND m.workspace_id = ?`,
+    targetId, actor.workspace_id,
+  );
+  if (!target) return res.status(404).json({ error: "That person isn’t in this workspace." });
+
+  // Only the fields actually present in the body are touched, so a caller can change
+  // one thing without having to resend the rest.
+  const has = (key: string) => Object.prototype.hasOwnProperty.call(req.body ?? {}, key);
+
+  let name = target.name;
+  if (has("name")) {
+    name = text(req.body.name, 80);
+    if (name.length < 2) return res.status(400).json({ error: "Please enter a name." });
+  }
+
+  let email = target.email;
+  if (has("email")) {
+    email = text(req.body.email, 160).toLowerCase();
+    if (!emailRe.test(email)) return res.status(400).json({ error: "That email doesn’t look right." });
+    const clash = row<{ id: string }>("SELECT id FROM users WHERE email = ? AND id <> ?", email, targetId);
+    if (clash) return res.status(409).json({ error: "Someone with that email is already here." });
+  }
+
+  let team: string | null = null;
+  if (has("team")) {
+    team = text(req.body.team, 40);
+    if (!row("SELECT 1 AS ok FROM teams WHERE workspace_id = ? AND name = ?", actor.workspace_id, team)) {
+      return res.status(400).json({ error: "Pick a team that exists in this workspace." });
+    }
+  }
+
+  const role = has("role") ? text(req.body.role, 80) : null;
+  const location = has("location") ? text(req.body.location, 80) : null;
+  const tz = has("tz_offset") ? Math.min(840, Math.max(-720, num(req.body.tz_offset) ?? 0)) : null;
+
+  // Promotion and demotion. The admin role lives on the membership, not the user.
+  let workspaceRole: "admin" | "member" | null = null;
+  if (has("workspace_role")) {
+    const wanted = text(req.body.workspace_role, 10);
+    if (wanted !== "admin" && wanted !== "member") {
+      return res.status(400).json({ error: "A person is either an admin or a member." });
+    }
+    workspaceRole = wanted;
+  }
+  if (workspaceRole === "member" && target.is_admin) {
+    const admins = row<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM memberships WHERE workspace_id = ? AND role = 'admin'", actor.workspace_id,
+    );
+    if ((admins?.n ?? 0) <= 1) {
+      return res.status(400).json({ error: "A workspace needs at least one admin." });
+    }
+  }
+
+  tx(() => {
+    run(
+      `UPDATE users SET name = ?, email = ?, role = COALESCE(?, role), team = COALESCE(?, team),
+              location = COALESCE(?, location), tz_offset = COALESCE(?, tz_offset)
+        WHERE id = ?`,
+      name, email, role, team, location, tz, targetId,
+    );
+    if (workspaceRole) {
+      run("UPDATE memberships SET role = ? WHERE user_id = ? AND workspace_id = ?",
+        workspaceRole, targetId, actor.workspace_id);
+      // Demoting someone must not leave their old session holding admin powers.
+      run("DELETE FROM sessions WHERE user_id = ?", targetId);
+    }
+    logActivity(actor.workspace_id, actor.id, "updated", name, "/team");
   });
   res.json({ ok: true });
 });

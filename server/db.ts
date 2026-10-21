@@ -27,6 +27,11 @@ for (const sql of [
   "ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE users ADD COLUMN avatar TEXT NOT NULL DEFAULT ''",
   "ALTER TABLE users ADD COLUMN calendar_token TEXT",
+  // Google Calendar -> Lucent. The URL is a bearer credential, so it is stored but
+  // never returned to the client in full.
+  "ALTER TABLE users ADD COLUMN google_calendar_url TEXT",
+  "ALTER TABLE users ADD COLUMN google_calendar_synced_at TEXT",
+  "ALTER TABLE users ADD COLUMN google_calendar_error TEXT NOT NULL DEFAULT ''",
 ]) {
   try {
     db.exec(sql);

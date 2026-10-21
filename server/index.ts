@@ -6,6 +6,7 @@ import { api } from "./api.js";
 import { originGuard } from "./auth.js";
 import { backfillTeams, db } from "./db.js";
 import { seed } from "./seed.js";
+import { connectedUsers, recordFailure, syncUser } from "./gcal.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..", "..");
@@ -70,6 +71,31 @@ app.use((error: Error & { status?: number; type?: string }, _req: express.Reques
   res.status(500).json({ error: "Something went wrong on our side." });
 });
 
+/**
+ * Refresh every connected Google calendar in the background. Google's iCal feed has no
+ * push channel, so polling is the only option; every 20 minutes is frequent enough for
+ * a schedule view and cheap enough to leave running.
+ */
+const GOOGLE_SYNC_MS = 20 * 60_000;
+
+async function refreshGoogleCalendars() {
+  for (const user of connectedUsers()) {
+    try {
+      await syncUser(user.id, user.google_calendar_url);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not read that calendar.";
+      // Keep the events already imported: a temporary outage should not empty the view.
+      recordFailure(user.id, message);
+      console.error(`Google calendar refresh failed for ${user.id}: ${message}`);
+    }
+  }
+}
+
+const syncTimer = setInterval(() => void refreshGoogleCalendars(), GOOGLE_SYNC_MS);
+syncTimer.unref();
+// One pass shortly after boot so a restart does not leave the view stale until the first tick.
+setTimeout(() => void refreshGoogleCalendars(), 8_000).unref();
+
 const port = Number(process.env.PORT) || 8787;
 const server = app.listen(port, () => {
   console.log(`Lucent API listening on http://localhost:${port}`);
@@ -82,6 +108,7 @@ server.on("error", (error) => {
 
 function shutdown(signal: string) {
   console.log(`${signal} received, shutting down`);
+  clearInterval(syncTimer);
   const force = setTimeout(() => process.exit(1), 10_000);
   force.unref();
   server.close(() => {

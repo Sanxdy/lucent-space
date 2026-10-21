@@ -19,14 +19,36 @@ through `node:sqlite`, so there is no native module to compile and no separate d
 
 ---
 
+## Demo
+
+https://github.com/user-attachments/assets/lucent-demo-placeholder
+
+A 45-second narrated tour: sign in, Home, the task board, the calendar with a Google
+import, the insights report, and the admin powers. The captures are of a running instance,
+not mockups, taken from a demo instance seeded with invented people, teams and projects —
+no real workspace data appears anywhere in the film.
+
+It has a voiceover and a music bed that ducks under the narration. The video is generated
+from HTML with [HyperFrames](https://hyperframes.dev): `docs/demo/` holds the composition,
+the screenshots and the audio, so it can be rebuilt after a UI change.
+
+```bash
+cd docs/demo
+npx hyperframes render -o ../../docs/demo/lucent-demo.mp4
+```
+
+---
+
 ## Table of Contents
 
 - [About the Project](#about-the-project)
   - [Built With](#built-with)
 - [Features](#features)
+- [Demo](#demo)
 - [Getting Started](#getting-started)
   - [Prerequisites](#prerequisites)
   - [Installation](#installation)
+  - [Creating the first admin](#creating-the-first-admin)
 - [Usage](#usage)
 - [Configuration](#configuration)
 - [Architecture](#architecture)
@@ -72,6 +94,36 @@ reload.
 - **Team** with team filters, presence, local time per member, workload and open task counts
 - **Settings** for profile, notifications, appearance, focus session lengths and data export or reset, persisted per user
 
+**Admin powers**
+
+The workspace admin is a real role, enforced on the server, not a cosmetic label. Every route below
+returns `403` for a member:
+
+- **Edit anyone** — name, email, job title, team, location, timezone and workspace role. Only the
+  fields present in the request change, so one field can be corrected without resending the rest.
+- **Promote and demote** admins. Demotion also revokes that person's sessions, so a stale cookie
+  cannot keep admin powers. The last admin cannot be demoted, and you cannot remove yourself.
+- **Create and delete teams**, moving their people to another team first when the team is not empty
+- **Remove people**, with their tasks kept and reassigned to nobody rather than deleted
+- **Delete projects**, with milestones cascading and tasks surviving unlinked
+- **Invite people**, issuing a temporary password
+
+**Calendar sync**
+
+Two directions, deliberately separate:
+
+- **Google → Lucent (import).** Paste a Google calendar's *Secret address in iCal format* under
+  **Calendar → Sync** and its events appear in the Lucent calendar, marked with a dashed blue edge and
+  labelled *From Google Calendar*. Recurring series are expanded server-side, including instances that
+  were moved or edited in Google and dates excluded with `EXDATE`. Read-only: nothing written here
+  reaches Google. A refresh runs every 20 minutes and keeps the last good copy if Google is
+  unreachable.
+- **Lucent → Google (export).** A per-user revocable ICS feed that Google Calendar, Apple Calendar or
+  Outlook can subscribe to.
+
+The import needs no OAuth client, no consent screen and no token refresh — only the secret address,
+which is treated as a credential: it is stored per user and never returned to the browser in full.
+
 **Platform**
 
 - Opaque session tokens in an HttpOnly, SameSite=Lax cookie
@@ -105,12 +157,10 @@ npm run dev
 The API starts on `http://localhost:8787` and Vite on `http://localhost:5173`, with `/api` proxied to
 the API. Open the Vite URL.
 
-The first boot creates `data/lucent.db` and seeds a demo workspace. Sign in with:
-
-| Account | Password | Role |
-| --- | --- | --- |
-| `maya@lucent.app` | `demo1234` | Workspace admin |
-| any seeded member email | `demo1234` | Member |
+Outside production the first boot seeds a demo workspace with 60 days of history. Sign in with
+`maya@lucent.app` / `demo1234` (workspace admin); every seeded member uses the same password. These
+accounts exist only when the demo seed runs — a production boot creates no accounts at all, so read
+[Creating the first admin](#creating-the-first-admin) before you deploy.
 
 You can also register a new account, which joins the seeded workspace as a member.
 
@@ -145,22 +195,46 @@ Every environment variable is optional.
 | `DATABASE_PATH` | `data/lucent.db` | SQLite file; the directory is created if missing |
 | `NODE_ENV` | unset | `production` enables secure cookies and HSTS, and disables the demo seed and open registration |
 | `SEED_DEMO` | unset | `1` seeds the demo workspace with its public demo passwords, even in production |
-| `ALLOW_OPEN_REGISTRATION` | `1` outside production; same as `SEED_DEMO` in production | `1` lets anyone self-register, `0` closes registration |
+| `ALLOW_OPEN_REGISTRATION` | `1` outside production; same as `SEED_DEMO` in production | `1` lets anyone self-register, `0` closes registration. The very first account is always allowed, so a fresh install is never locked out |
 | `TRUST_PROXY` | unset | `1` trusts `X-Forwarded-*`, required behind nginx so cookies and the origin check see HTTPS |
 | `COOKIE_SECURE` | unset | `false` allows plain-HTTP cookies in production, for local testing only |
 
-### Creating the first account in production
+### Creating the first admin
 
-A production boot without `SEED_DEMO=1` starts with no workspace and no accounts. The first account
-created through `POST /api/auth/register` bootstraps the workspace: it is named "Lucent Studio", the
-registrant becomes its admin, and later registrations join as members.
+A fresh install has **no accounts**, and registration is closed in production, so there is nothing to
+sign in with until an admin exists. Two ways in — pick one.
 
-Registration is closed in production by default. Start the process with `ALLOW_OPEN_REGISTRATION=1`
-until the first account exists, then remove it and restart.
+**Option A — one command (recommended for a server).** Run it on the host, then sign in:
 
-With registration closed, an admin can still invite people from **Settings → Team**. The invite issues
-a temporary password; registering with that email and the temporary password as `invite_token` lets
-the invitee choose their own password.
+```bash
+node scripts/create-admin.mjs you@example.com "Your Name"
+```
+
+It prints a generated password once. Pass `--password 'your-own-password'` to choose it yourself
+(minimum 8 characters). Running it again for the same email resets that password and re-grants admin,
+which is also how you recover a locked-out account. It creates the workspace, seeds the five default
+teams, and is safe to run against a live database.
+
+```bash
+node scripts/create-admin.mjs you@example.com "Your Name" --password 'a-long-passphrase'
+```
+
+**Option B — register in the browser.** The **first** account to register on an empty install is
+accepted even with registration closed, and it becomes the workspace admin. Every later registration
+is refused with `Registration is closed. Ask a workspace admin for an invite.` So you do not need to
+flip `ALLOW_OPEN_REGISTRATION` to get started:
+
+1. Open the app and choose **Create an account**.
+2. Register — you own the workspace as admin.
+3. Invite everyone else from **Team → Invite**.
+
+That self-registration window closes permanently the moment the first user row exists, so it cannot
+be used to join a workspace that already has people in it.
+
+**Inviting the rest of the team.** An admin invites people from **Team → Invite**. The invite issues a
+temporary password shown once; the invitee registers with that email and the temporary password as
+`invite_token` to choose their own password. No email is sent — hand the temporary password over out
+of band.
 
 ---
 
@@ -185,8 +259,12 @@ server/
   auth.ts                  scrypt, sessions, origin guard, rate limit
   db.ts, schema.sql        node:sqlite access and schema
   insights.ts              period stats and bucket series
+  gcal.ts                  Google Calendar import: validate, fetch, parse, expand, store
   seed.ts                  demo workspace
 scripts/smoke.ts           end-to-end API check on a temporary database
+scripts/create-admin.mjs   create or promote an admin on the command line
+scripts/gcal-test.mjs      46 checks for the ICS parser and recurrence expansion
+scripts/first-run-test.mjs 17 checks that a fresh install is reachable
 ```
 
 ### API
@@ -205,6 +283,17 @@ scripts/smoke.ts           end-to-end API check on a temporary database
 | `GET` | `/api/insights?range=7\|30\|90` | Period stats and series |
 | `POST` | `/api/focus` | Record a focus session |
 | `GET` | `/api/export.csv` | CSV export |
+| `PATCH` | `/api/members/:id` | Admin: change anyone's details or workspace role |
+| `DELETE` | `/api/members/:id` | Admin: remove someone (tasks survive, unassigned) |
+| `POST` / `DELETE` | `/api/teams`, `/api/teams/:id` | Admin: create and delete teams |
+| `DELETE` | `/api/projects/:id` | Admin: delete a project, milestones cascade |
+| `POST` / `DELETE` | `/api/profile/avatar` | Profile photo as a data URL |
+| `GET` | `/api/calendar/google` | Google import status |
+| `POST` / `DELETE` | `/api/calendar/google` | Connect or disconnect a Google calendar |
+| `POST` | `/api/calendar/google/sync` | Refresh the imported events now |
+| `GET` | `/api/calendar/google/events?from&to` | Imported events for a visible range |
+| `GET` | `/api/calendar.ics?token=` | Read-only ICS feed for external calendars |
+| `POST` / `DELETE` | `/api/calendar/token` | Rotate or revoke the ICS feed token |
 
 ---
 
@@ -299,7 +388,10 @@ Found a problem? Open an issue rather than a public proof of concept.
 ## Limitations
 
 - No email delivery, so invitations hand over a temporary password out of band
-- No file uploads, OAuth providers or real-time sync between open tabs
+- No OAuth providers; Google Calendar import uses the secret iCal address instead of OAuth
+- Google Calendar import is one-way. Edits made in Lucent do not reach Google, and the import is
+  per-user: it fills the calendar of the person who connected it
+- No real-time sync between open tabs
 - SQLite suits a single process. Running multiple instances would need a shared database
 - Presence and seeded people, projects and tasks are sample data, labeled as such in the interface
 
@@ -313,6 +405,8 @@ Issues and pull requests are welcome. Before opening a pull request:
 npm run typecheck
 npm run smoke
 npm run build
+node scripts/gcal-test.mjs       # ICS parsing, recurrence, storage
+node scripts/first-run-test.mjs  # a fresh install is reachable
 ```
 
 Keep changes inside the existing token system rather than adding new color or spacing literals, and

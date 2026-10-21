@@ -1,7 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Seg } from "../components/Seg";
 import { Link } from "react-router-dom";
 import { useStore, useTimerRemaining, useWorkspace } from "../store";
+import { api } from "../api";
+import type { GoogleEvent } from "../types";
 import { Avatar } from "../components/Avatar";
 import {
   IconCalendar,
@@ -42,18 +44,109 @@ export function Home() {
 
   const today = todayIso();
   const now = new Date();
-  const myTasks = workspace.tasks.filter((task) => task.assignee_id === me?.id);
-  const myOpen = myTasks.filter((task) => task.status !== "done");
-  const doneToday = myTasks.filter((task) => task.done_at && isoDay(new Date(task.done_at)) === today);
-  const overdue = myOpen.filter((task) => task.due_date && task.due_date < today);
-  const dueToday = myOpen.filter((task) => task.due_date === today);
+
+  /**
+   * An admin runs the workspace, so this page shows them everyone's work; a member
+   * sees their own. Filtering strictly by assignee left an admin looking at an empty
+   * day while the team had four finished tasks.
+   */
+  const seesEverything = Boolean(me?.is_admin);
+  const scopeTasks = seesEverything ? workspace.tasks : workspace.tasks.filter((task) => task.assignee_id === me?.id);
+  const scopeOpen = scopeTasks.filter((task) => task.status !== "done");
+  const doneToday = scopeTasks.filter((task) => task.done_at && isoDay(new Date(task.done_at)) === today);
+  const overdue = scopeOpen.filter((task) => task.due_date && task.due_date < today);
+  const dueToday = scopeOpen.filter((task) => task.due_date === today);
+
+  const memberName = (id: string | null) =>
+    (id ? workspace.members.find((member) => member.id === id)?.name : undefined) ?? "Unassigned";
 
   const todaysEvents = workspace.events
     .filter((event) => isoDay(new Date(event.starts_at)) === today)
     .sort((a, b) => a.starts_at.localeCompare(b.starts_at));
-  const upcoming = todaysEvents.filter((event) => new Date(event.starts_at).getTime() >= now.getTime());
-  const nextEvents = (upcoming.length > 0 ? upcoming : todaysEvents).slice(0, 4);
+
+  /**
+   * Home used to read only Lucent meetings, so a person whose schedule lives in Google
+   * saw "No meetings today" while their day was full. Imported events are merged in.
+   */
+  const [googleToday, setGoogleToday] = useState<GoogleEvent[]>([]);
+  useEffect(() => {
+    const from = new Date();
+    from.setHours(0, 0, 0, 0);
+    const to = new Date(from.getTime() + 2 * 86_400_000);
+    let alive = true;
+    api
+      .googleCalendarEvents(from.toISOString(), to.toISOString())
+      .then((result) => {
+        if (!alive) return;
+        setGoogleToday(result.events.filter((event) => event.starts_at.slice(0, 10) === today || event.all_day === 1));
+      })
+      .catch(() => {
+        // No Google calendar connected is not an error on this page.
+        if (alive) setGoogleToday([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [today]);
+
+  /** One shape for the agenda, whatever the source. */
+  type AgendaItem = {
+    id: string;
+    title: string;
+    starts_at: string;
+    kind: string;
+    meta: string;
+    source: "lucent" | "google" | "task";
+  };
+
+  const agenda = useMemo<AgendaItem[]>(() => {
+    const items: AgendaItem[] = [];
+
+    for (const event of todaysEvents) {
+      items.push({
+        id: event.id,
+        title: event.title,
+        starts_at: event.starts_at,
+        kind: event.kind,
+        meta: `${timeLabel(event.starts_at)} · ${event.duration_min} min${event.location ? ` · ${event.location}` : ""}`,
+        source: "lucent",
+      });
+    }
+
+    for (const event of googleToday) {
+      items.push({
+        id: event.id,
+        title: event.title,
+        // An all-day entry has no meaningful clock time; park it at the start of the day.
+        starts_at: event.all_day ? `${today}T00:00` : event.starts_at,
+        kind: "meeting",
+        meta: event.all_day
+          ? `All day${event.location ? ` · ${event.location}` : ""}`
+          : `${timeLabel(event.starts_at)} · ${event.location || "Google Calendar"}`,
+        source: "google",
+      });
+    }
+
+    for (const task of dueToday) {
+      items.push({
+        id: task.id,
+        title: task.title,
+        starts_at: `${today}T23:59`,
+        kind: "review",
+        meta: seesEverything
+          ? `Due today · ${memberName(task.assignee_id)}`
+          : `Due today · ${task.estimate ?? 2}h estimate`,
+        source: "task",
+      });
+    }
+
+    return items.sort((a, b) => a.starts_at.localeCompare(b.starts_at));
+  }, [todaysEvents, googleToday, dueToday, today, seesEverything]);
+
+  const upcoming = agenda.filter((item) => new Date(item.starts_at).getTime() >= now.getTime());
+  const nextEvents = (upcoming.length > 0 ? upcoming : agenda).slice(0, 4);
   const nextEvent = nextEvents[0];
+
   const meetingsDone = todaysEvents.filter(
     (event) => new Date(event.starts_at).getTime() + event.duration_min * 60_000 < now.getTime(),
   ).length;
@@ -61,18 +154,19 @@ export function Home() {
   const week = weekDays(now);
   const weekBars = week.map((day) => {
     const key = isoDay(day);
-    const count = workspace.tasks.filter((task) => task.done_at && isoDay(new Date(task.done_at)) === key).length;
+    const count = scopeTasks.filter((task) => task.done_at && isoDay(new Date(task.done_at)) === key).length;
     return { key, label: day.toLocaleDateString("en-US", { weekday: "narrow" }), count, today: key === today };
   });
   const weekTotal = weekBars.reduce((sum, bar) => sum + bar.count, 0);
   const lastWeek = weekDays(addDays(now, -7));
-  const lastWeekTotal = workspace.tasks.filter(
+  const lastWeekTotal = scopeTasks.filter(
     (task) => task.done_at && lastWeek.some((day) => isoDay(day) === isoDay(new Date(task.done_at!))),
   ).length;
   const weekDelta = lastWeekTotal ? Math.round(((weekTotal - lastWeekTotal) / lastWeekTotal) * 100) : 0;
 
   const taskTotal = doneToday.length + dueToday.length;
-  const taskPct = pct(doneToday.length, Math.max(taskTotal, 1)) / 100;
+  // No Math.max(…, 1) here: an empty day is not a day with one failed task.
+  const taskPct = taskTotal ? pct(doneToday.length, taskTotal) / 100 : 0;
   const focusPct = Math.min(1, workspace.focus.minutes / 120);
   const meetPct = todaysEvents.length ? meetingsDone / todaysEvents.length : 0;
 
@@ -85,9 +179,9 @@ export function Home() {
   const dateLine = useMemo(() => {
     const day = now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
     const meetings = todaysEvents.length;
-    const left = myOpen.filter((task) => task.due_date && task.due_date <= today).length;
+    const left = scopeOpen.filter((task) => task.due_date && task.due_date <= today).length;
     return `${day} · ${meetings} ${meetings === 1 ? "meeting" : "meetings"} and ${left} ${left === 1 ? "task" : "tasks"} left today`;
-  }, [now, todaysEvents.length, myOpen, today]);
+  }, [now, todaysEvents.length, scopeOpen, today]);
 
   return (
     <>
@@ -98,15 +192,18 @@ export function Home() {
         </div>
         <div className="head-stats">
           <article className="stat glass">
-            <span className="stat-label">Done today</span>
-            <div className="stat-value">{doneToday.length}<small>/ {Math.max(taskTotal, 1)}</small></div>
+            <span className="stat-label">{seesEverything ? "Done today · team" : "Done today"}</span>
+            <div className="stat-value">
+              {doneToday.length}
+              {taskTotal > 0 && <small>/ {taskTotal}</small>}
+            </div>
           </article>
           <article className="stat glass">
             <span className="stat-label">Focus today</span>
             <div className="stat-value">{hours(workspace.focus.minutes)}<small>/ 2h</small></div>
           </article>
           <article className="stat glass">
-            <span className="stat-label">Overdue</span>
+            <span className="stat-label">{seesEverything ? "Overdue · team" : "Overdue"}</span>
             <div className="stat-value" style={{ color: overdue.length > 0 ? "var(--danger)" : undefined }}>
               {overdue.length}
             </div>
@@ -129,7 +226,9 @@ export function Home() {
           <div className="card-head">
             <div>
               <h2>Today</h2>
-              <span className="hint">Close your rings</span>
+              <span className="hint">
+                {seesEverything ? "Everyone in the workspace" : "Close your rings"}
+              </span>
             </div>
           </div>
           <div className="rings">
@@ -144,7 +243,7 @@ export function Home() {
             <dl className="rings-legend">
               <div className="rings-row rings-tasks">
                 <dt>Tasks</dt>
-                <dd>{doneToday.length}<small>/ {Math.max(taskTotal, 1)}</small></dd>
+                <dd>{doneToday.length}{taskTotal > 0 && <small>/ {taskTotal}</small>}</dd>
               </div>
               <div className="rings-row rings-focus">
                 <dt>Focus</dt>
@@ -152,7 +251,7 @@ export function Home() {
               </div>
               <div className="rings-row rings-meet">
                 <dt>Meetings</dt>
-                <dd>{meetingsDone}<small>/ {todaysEvents.length}</small></dd>
+                <dd>{meetingsDone}{todaysEvents.length > 0 && <small>/ {todaysEvents.length}</small>}</dd>
               </div>
             </dl>
           </div>
@@ -177,28 +276,36 @@ export function Home() {
                   )}
                 </span>
                 <span className="next-title">{nextEvent.title}</span>
-                <span className="next-meta">
-                  {timeLabel(nextEvent.starts_at)} · {nextEvent.duration_min} min{nextEvent.location ? ` · ${nextEvent.location}` : ""}
-                </span>
+                <span className="next-meta">{nextEvent.meta}</span>
                 <span className="next-foot">
                   <span className="chip">{nextEvent.kind}</span>
-                  <Link className="hint" to="/calendar">Open day</Link>
+                  {nextEvent.source === "task" ? (
+                    <Link className="hint" to="/tasks">Open tasks</Link>
+                  ) : (
+                    <Link className="hint" to="/calendar">Open day</Link>
+                  )}
                 </span>
               </div>
               {nextEvents.length > 1 && (
                 <div className="next-rest">
                   {nextEvents.slice(1).map((event) => (
-                    <Link key={event.id} to="/calendar" style={{ ["--hue" as string]: eventHue(event.kind) }}>
+                    <Link
+                      key={event.id}
+                      to={event.source === "task" ? "/tasks" : "/calendar"}
+                      style={{ ["--hue" as string]: eventHue(event.kind) }}
+                    >
                       <i />
                       <span>{event.title}</span>
-                      <time>{timeLabel(event.starts_at)}</time>
+                      <time>{event.meta.split(" · ")[0]}</time>
                     </Link>
                   ))}
                 </div>
               )}
             </>
           ) : (
-            <div className="empty">No meetings today. Protect the focus time.</div>
+            <div className="empty">
+              Nothing on the agenda today. Add a meeting or a task with a due date.
+            </div>
           )}
         </section>
 
@@ -243,7 +350,7 @@ export function Home() {
                     <span className="focus-label">Focus on</span>
                     <select className="select" value={focusTask} onChange={(event) => setFocusTask(event.target.value)} aria-label="Task to focus on">
                       <option value="">No task, just focus</option>
-                      {myOpen.map((task) => (
+                      {scopeOpen.map((task) => (
                         <option key={task.id} value={task.id}>{task.title}</option>
                       ))}
                     </select>
@@ -254,7 +361,7 @@ export function Home() {
                 ) : (
                   <div className="focus-idle">
                     <span className="focus-label">Focusing on</span>
-                    <div className="focus-task">{myOpen.find((task) => task.id === focusTask)?.title ?? `${Math.round(timer.total / 60)}-minute block`}</div>
+                    <div className="focus-task">{scopeOpen.find((task) => task.id === focusTask)?.title ?? `${Math.round(timer.total / 60)}-minute block`}</div>
                     <div className="focus-btns">
                       <button className="btn" onClick={timer.running ? pauseFocus : resumeFocus}>
                         {timer.running ? <IconPause size={13} /> : <IconPlay size={13} />}
@@ -284,7 +391,7 @@ export function Home() {
             </div>
             <Link className="hint" to="/tasks">All tasks</Link>
           </div>
-          {myOpen.slice(0, 6).map((task) => {
+          {scopeOpen.slice(0, 6).map((task) => {
             const project = workspace.projects.find((item) => item.id === task.project_id);
             return (
               <div key={task.id} className="taskline">
@@ -316,7 +423,7 @@ export function Home() {
               </div>
             );
           })}
-          {myOpen.length === 0 && <div className="empty">Nothing assigned to you. Rare and excellent.</div>}
+          {scopeOpen.length === 0 && <div className="empty">Nothing assigned to you. Rare and excellent.</div>}
         </section>
 
         <section className="card glass w-week">

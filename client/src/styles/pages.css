@@ -658,6 +658,33 @@ select.tk-chip option { background: var(--glass-solid); color: var(--text); }
 .cal-ev.team { border-left-color: var(--ok); }
 .cal-ev.review { border-left-color: var(--warn); }
 .cal-ev.focus { border-left-color: var(--accent-2); }
+/* Imported Google events. A dashed left edge instead of a solid one reads as "not
+   yours to edit" without needing a legend, and the blue is Google's own accent so the
+   source is obvious at a glance. */
+.cal-ev.google {
+  border-left-style: dashed;
+  border-left-color: var(--google, #4285f4);
+  background: color-mix(in srgb, var(--google, #4285f4) 10%, var(--glass-inset));
+}
+.cal-dots .google { background: var(--google, #4285f4); }
+.day-ev.is-google .ln {
+  background: var(--google, #4285f4) !important;
+  opacity: 0.85;
+}
+.day-ev.is-google .ev-body .kind {
+  color: var(--google, #4285f4);
+  background: color-mix(in srgb, var(--google, #4285f4) 14%, transparent);
+}
+
+/* Sync dialog sections */
+.sync-title { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+.sync-divider {
+  border: 0;
+  height: 1px;
+  margin: 0;
+  background: var(--line);
+}
+
 .cal-more { font-size: 10.5px; color: var(--text-4); padding-left: 6px; }
 .cal-dots { display: none; gap: 4px; padding: 3px 0 0 5px; }
 .cal-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
@@ -803,6 +830,9 @@ select.tk-chip option { background: var(--glass-solid); color: var(--text); }
 .pc-donut svg { position: absolute; inset: 0; transform: rotate(-90deg); }
 .pc-donut circle { fill: none; stroke-width: 5; }
 .pc-donut .pc-track { stroke: color-mix(in srgb, var(--text) 10%, transparent); }
+/* A project with no tasks: dim the ring and show a dash instead of a misleading 0%. */
+.pc-donut.is-empty .pc-track { stroke: color-mix(in srgb, var(--text) 6%, transparent); }
+.pc-donut.is-empty b { color: var(--text-4); }
 .pc-donut .pc-arc { stroke: var(--hue, var(--accent)); stroke-linecap: round; transition: stroke-dasharray 700ms var(--ease); }
 .pc-donut b { font-size: 13px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .pc-next-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -1032,7 +1062,7 @@ select.tk-chip option { background: var(--glass-solid); color: var(--text); }
 .member-card .mc-id strong { display: flex; align-items: center; gap: 8px; font-family: var(--font-display); font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
 .member-card .mc-id .you { font-family: var(--font); font-size: 11.5px; font-weight: 650; color: var(--accent-ink); background: var(--accent-soft); padding: 2px 7px; border-radius: 999px; }
 .member-card .mc-id > span { font-size: 13.5px; color: var(--text-2); }
-.member-card .mc-id .pchip { justify-self: start; margin-top: 5px; }
+.member-card > .pchip { align-self: start; max-width: 100%; margin-top: 5px; }
 .member-card .mc-when { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
 .member-card .presence { display: inline-flex; align-items: center; gap: 7px; color: var(--text-2); font-weight: 560; }
 .member-card .presence i { width: 8px; height: 8px; border-radius: 50%; background: var(--text-4); }
