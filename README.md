@@ -21,7 +21,7 @@ through `node:sqlite`, so there is no native module to compile and no separate d
 
 ## Demo
 
-https://github.com/Sanxdy/zen-space/blob/master/docs/demo/lucent-demo.mp4
+![Lucent demo](docs/demo/lucent-demo.gif)
 
 ---
 
