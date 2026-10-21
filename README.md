@@ -23,7 +23,7 @@ through `node:sqlite`, so there is no native module to compile and no separate d
 
 https://github.com/user-attachments/assets/lucent-demo-placeholder
 
-A 45-second narrated tour: sign in, Home, the task board, the calendar with a Google
+A 44-second narrated tour: sign in, Home, the task board, the calendar with a Google
 import, the insights report, and the admin powers. The captures are of a running instance,
 not mockups, taken from a demo instance seeded with invented people, teams and projects —
 no real workspace data appears anywhere in the film.

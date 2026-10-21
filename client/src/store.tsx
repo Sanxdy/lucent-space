@@ -170,6 +170,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
   }, [refresh]);
 
+  /* Keep the workspace current without a reload.
+     Another person's edit, a task created through the bot bridge, and a Google Calendar
+     refresh all land on the server. A page that reads the server once shows a stale board
+     until someone presses reload, so pull again on a slow timer and whenever the tab
+     comes back into view. Skipped while hidden, because a background tab does not need
+     to keep asking. */
+  useEffect(() => {
+    if (!me) return;
+    let stopped = false;
+    const pull = () => {
+      if (stopped || document.visibilityState !== "visible") return;
+      void refresh();
+    };
+    const handle = window.setInterval(pull, 12_000);
+    document.addEventListener("visibilitychange", pull);
+    window.addEventListener("focus", pull);
+    return () => {
+      stopped = true;
+      window.clearInterval(handle);
+      document.removeEventListener("visibilitychange", pull);
+      window.removeEventListener("focus", pull);
+    };
+  }, [me, refresh]);
+
   useEffect(() => {
     const onExpired = () => {
       setMe(null);
