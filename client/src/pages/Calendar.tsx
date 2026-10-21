@@ -366,7 +366,16 @@ export function Calendar() {
 
             {selectedEvents.map((event) => (
               <div key={event.id} className={`day-ev${event.google ? " is-google" : ""}`}>
-                <span className="t">{whenLabel(event)}</span>
+                <span className="t">
+                  <span className="t-local">{whenLabel(event)}</span>
+                  {!event.all_day &&
+                    ZONES.filter((zone) => zone.timeZone).map((zone) => (
+                      <span className="t-zone" key={zone.key}>
+                        <span className="t-zone-name">{zone.label}</span>
+                        {timeInZone(event.starts_at, zone.timeZone)}
+                      </span>
+                    ))}
+                </span>
                 <span className="ln" style={{ background: KIND_COLOR[event.kind] ?? "var(--accent)" }} />
                 <div className="ev-body">
                   <div className="row-between" style={{ gap: 6 }}>
@@ -393,17 +402,7 @@ export function Calendar() {
                     {" · "}
                     {event.location || "No location"}
                   </span>
-                  {/* Local first: that is the reader's own clock. */}
-                  {!event.all_day && (
-                    <span className="tz-row">
-                      {ZONES.map((zone, index) => (
-                        <span className={`tz${index === 0 ? " tz-local" : ""}`} key={zone.key}>
-                          <span className="tz-name">{zone.label}</span>
-                          <span className="tz-time">{timeInZone(event.starts_at, zone.timeZone)}</span>
-                        </span>
-                      ))}
-                    </span>
-                  )}
+
                   <span className="kind">
                     {event.google
                       ? "From Google Calendar"
