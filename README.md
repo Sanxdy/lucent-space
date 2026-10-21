@@ -21,21 +21,7 @@ through `node:sqlite`, so there is no native module to compile and no separate d
 
 ## Demo
 
-https://github.com/user-attachments/assets/lucent-demo-placeholder
-
-A 44-second narrated tour: sign in, Home, the task board, the calendar with a Google
-import, the insights report, and the admin powers. The captures are of a running instance,
-not mockups, taken from a demo instance seeded with invented people, teams and projects —
-no real workspace data appears anywhere in the film.
-
-It has a voiceover and a music bed that ducks under the narration. The video is generated
-from HTML with [HyperFrames](https://hyperframes.dev): `docs/demo/` holds the composition,
-the screenshots and the audio, so it can be rebuilt after a UI change.
-
-```bash
-cd docs/demo
-npx hyperframes render -o ../../docs/demo/lucent-demo.mp4
-```
+<video src="docs/demo/lucent-demo.mp4" controls width="100%"></video>
 
 ---
 
