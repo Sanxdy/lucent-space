@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { api } from "./api.js";
-import { originGuard } from "./auth.js";
+import { originGuard, requireUser } from "./auth.js";
 import { backfillTeams, db } from "./db.js";
 import { seed } from "./seed.js";
 import { connectedUsers, recordFailure, syncUser } from "./gcal.js";
@@ -41,6 +41,33 @@ app.use("/api", (_req, res, next) => {
   res.setHeader("Cache-Control", "no-store");
   next();
 });
+
+/**
+ * A counter that only ever goes up, bumped by every request that changes something.
+ *
+ * Clients read it on a fast tick and pull the workspace the moment it moves, which turns a
+ * blind 12-second poll into a near-immediate update. Reads and auth are excluded so that a
+ * page sitting open does not look like activity.
+ */
+let writeVersion = 1;
+const MUTATING = new Set(["POST", "PATCH", "PUT", "DELETE"]);
+const VERSION_EXEMPT = /^\/api\/(version|health|auth\/me)(\?|$)/;
+
+app.get("/api/version", requireUser, (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ version: writeVersion });
+});
+
+app.use("/api", (req, res, next) => {
+  if (MUTATING.has(req.method) && !VERSION_EXEMPT.test(req.path)) {
+    // Bump before the handler runs: a client that reads immediately after its own write must
+    // already see the new number, otherwise it would skip the refresh it just caused.
+    writeVersion += 1;
+    res.setHeader("X-Workspace-Version", String(writeVersion));
+  }
+  next();
+});
+
 app.use("/api", api);
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));

@@ -172,25 +172,56 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   /* Keep the workspace current without a reload.
      Another person's edit, a task created through the bot bridge, and a Google Calendar
-     refresh all land on the server. A page that reads the server once shows a stale board
-     until someone presses reload, so pull again on a slow timer and whenever the tab
-     comes back into view. Skipped while hidden, because a background tab does not need
-     to keep asking. */
+     refresh all land on the server. Waiting out a fixed interval made those changes appear
+     late, so the server publishes a counter that moves on every write and this watches it:
+     a two-second version read is far cheaper than a full workspace fetch, and the moment the
+     number moves the board is pulled. A slow full pull stays as a fallback in case the version
+     read is unavailable. Nothing runs while the tab is hidden. */
   useEffect(() => {
     if (!me) return;
     let stopped = false;
-    const pull = () => {
+    let lastSeen: number | null = null;
+
+    const tick = async () => {
+      if (stopped || document.visibilityState !== "visible") return;
+      try {
+        const version = await api.version();
+        if (lastSeen === null) {
+          lastSeen = version;
+          return;
+        }
+        if (version !== lastSeen) {
+          lastSeen = version;
+          await refresh();
+        }
+      } catch {
+        // A version read that fails must not stop the page working: the fallback below
+        // still pulls on its own schedule.
+      }
+    };
+
+    const fast = window.setInterval(tick, 2_000);
+    const fallback = window.setInterval(() => {
       if (stopped || document.visibilityState !== "visible") return;
       void refresh();
+    }, 20_000);
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        void tick();
+        void refresh();
+      }
     };
-    const handle = window.setInterval(pull, 12_000);
-    document.addEventListener("visibilitychange", pull);
-    window.addEventListener("focus", pull);
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    void tick();
+
     return () => {
       stopped = true;
-      window.clearInterval(handle);
-      document.removeEventListener("visibilitychange", pull);
-      window.removeEventListener("focus", pull);
+      window.clearInterval(fast);
+      window.clearInterval(fallback);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
     };
   }, [me, refresh]);
 

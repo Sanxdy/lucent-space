@@ -36,6 +36,12 @@ export const api = {
   logout: () => request<{ ok: true }>("/auth/logout", { method: "POST" }),
   bootstrap: () => request<Bootstrap>("/bootstrap"),
 
+  /** Cheap change counter: it moves whenever anything in the workspace is written. */
+  version: async () => {
+    const { version } = await request<{ version: number }>("/version");
+    return version;
+  },
+
   createTask: (input: Partial<Task> & { title: string }) =>
     request<{ id: string }>("/tasks", { method: "POST", body: JSON.stringify(input) }),
   patchTask: (id: string, patch: Record<string, unknown>) =>
