@@ -134,8 +134,8 @@ No database server, Docker or build toolchain is required.
 ### Installation
 
 ```bash
-git clone https://github.com/Sanxdy/zen-space.git
-cd zen-space
+git clone https://github.com/Sanxdy/lucent-space.git
+cd lucent-space
 npm install
 npm run dev
 ```
@@ -293,7 +293,7 @@ curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt install -y nodejs
 
 sudo useradd --system --create-home --shell /usr/sbin/nologin lucent
-sudo -u lucent git clone https://github.com/Sanxdy/zen-space.git /srv/lucent
+sudo -u lucent git clone https://github.com/Sanxdy/lucent-space.git /srv/lucent
 cd /srv/lucent
 sudo -u lucent npm ci
 sudo -u lucent npm run build
