@@ -33,8 +33,51 @@ export function daysBetween(a: Date, b: Date) {
   return Math.round((end - start) / 86_400_000);
 }
 
+/**
+ * The zones shown next to an event, in the order a person reads them: their own first, then
+ * the two places the team works from.
+ */
+export const ZONES = [
+  { key: "local", label: "Local", timeZone: undefined },
+  { key: "us", label: "US", timeZone: "America/New_York" },
+  { key: "eu", label: "EU", timeZone: "Europe/Berlin" },
+] as const;
+
+/** A UTC instant, as the calendar stores it. */
+function instantOf(value: string): Date {
+  // "2026-10-21T05:00:00.000Z" is a real instant; "2026-10-21T09:00" is a wall-clock time
+  // typed in this browser, which Date parses as local. Both end up as the same kind of Date.
+  return new Date(value);
+}
+
+/**
+ * Time in one zone.
+ *
+ * The old version rebuilt the date from the string's own digits as a local Date, which threw
+ * away the trailing Z: an event stored at 05:00 UTC was shown as 05:00 local instead of 12:00
+ * WIB. Formatting with an explicit timeZone makes that impossible.
+ */
+export function timeInZone(value: string, timeZone?: string) {
+  const date = instantOf(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone,
+  });
+}
+
+/** The short zone name Intl reports, e.g. "GMT+7", "EDT", "GMT+2". */
+export function zoneName(date: Date, timeZone?: string) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    timeZoneName: "short",
+  }).formatToParts(date);
+  return parts.find((part) => part.type === "timeZoneName")?.value ?? "";
+}
+
 export function timeLabel(value: string) {
-  return parseDateTime(value).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return timeInZone(value, undefined);
 }
 
 export function dayLabel(value: string, style: "short" | "long" = "short") {

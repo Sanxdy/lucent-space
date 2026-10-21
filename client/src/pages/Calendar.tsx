@@ -5,7 +5,7 @@ import { useStore, useWorkspace } from "../store";
 import { EventModal } from "../components/CreateModals";
 import { Modal } from "../components/Modal";
 import { IconChevronLeft, IconChevronRight, IconPlus, IconRefresh, IconTrash } from "../components/Icons";
-import { addDays, isoDay, monthMatrix, timeLabel, todayIso, weekDays } from "../lib/format";
+import { addDays, isoDay, monthMatrix, timeInZone, timeLabel, todayIso, weekDays, ZONES } from "../lib/format";
 import type { GoogleCalendarStatus, GoogleEvent } from "../types";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -393,6 +393,17 @@ export function Calendar() {
                     {" · "}
                     {event.location || "No location"}
                   </span>
+                  {/* Local first: that is the reader's own clock. */}
+                  {!event.all_day && (
+                    <span className="tz-row">
+                      {ZONES.map((zone, index) => (
+                        <span className={`tz${index === 0 ? " tz-local" : ""}`} key={zone.key}>
+                          <span className="tz-name">{zone.label}</span>
+                          <span className="tz-time">{timeInZone(event.starts_at, zone.timeZone)}</span>
+                        </span>
+                      ))}
+                    </span>
+                  )}
                   <span className="kind">
                     {event.google
                       ? "From Google Calendar"
