@@ -70,7 +70,25 @@ export function Tasks() {
         draggable
         role="button"
         tabIndex={0}
-        onDragStart={() => setDragId(task.id)}
+        onDragStart={(event) => {
+          setDragId(task.id);
+          const dt = event.dataTransfer;
+          /* The intent is a move, and it is set first and on its own: `setDragImage` throws on some
+             elements (a backdrop-filter glass card among them), and sharing a try-block meant one
+             refusal silently dropped the "this is a move" signal too. */
+          try { dt.effectAllowed = "move"; } catch { /* the drop still works without it */ }
+          try { dt.setData("text/plain", task.id); } catch { /* the id also rides on dragId */ }
+          /* A glass card does not always paint into the browser's default drag image, which left the
+             cursor dragging nothing visible. The card itself is used as the ghost, offset so it sits
+             under the pointer rather than jumping to its corner. */
+          try {
+            const card = event.currentTarget as HTMLElement;
+            const box = card.getBoundingClientRect();
+            dt.setDragImage(card, box.width / 2, 24);
+          } catch {
+            /* the CSS `.dragging` state is what the user actually sees */
+          }
+        }}
         onDragEnd={() => {
           setDragId(null);
           setOverColumn(null);
@@ -211,7 +229,7 @@ export function Tasks() {
       </div>
 
       {view === "board" ? (
-        <section className="board">
+        <section className={`board ${dragId ? "is-dragging" : ""}`}>
           {COLUMNS.map((column) => {
             const tasks = filtered.filter((task) => task.status === column.id);
             const visible = column.id === "done" && !showAllDone ? tasks.slice(0, 6) : tasks;
@@ -224,7 +242,10 @@ export function Tasks() {
                   setOverColumn(column.id);
                 }}
                 onDragLeave={() => setOverColumn((current) => (current === column.id ? null : current))}
-                onDrop={() => drop(column.id)}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  drop(column.id);
+                }}
               >
                 <div className="bcol-head">
                   <span className={`cdot ${column.id}`} />
@@ -234,7 +255,7 @@ export function Tasks() {
                     <IconPlus size={16} />
                   </button>
                 </div>
-                <div className="bcol-list">
+                <div className={`bcol-list ${dragId && tasks.some((task) => task.id === dragId) ? "is-source" : ""}`}>
                   {visible.map(taskCard)}
                   {tasks.length === 0 && <div className="bcol-empty">Nothing here</div>}
                 </div>
